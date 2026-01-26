@@ -24,61 +24,71 @@ def worker(log_queue: Queue):
 # -----------------------
 # UI state (main process)
 # -----------------------
-header = "Starting..."
-logs = {
-    "a": deque(maxlen=15),
-    "b": deque(maxlen=15),
-    "c": deque(maxlen=15),
-}
 
-# -----------------------
-# Layout
-# -----------------------
-layout = Layout()
-layout.split_column(
-    Layout(name="header", size=3),
-    Layout(name="body"),
-)
-layout["body"].split_row(
-    Layout(name="log_a"),
-    Layout(name="log_b"),
-    Layout(name="log_c"),
-)
+def main(log_queue: Queue):
+    header = "Starting..."
+    logs = {
+        "a": deque(maxlen=50),
+        "b": deque(maxlen=25),
+        "c": deque(maxlen=50),
+    }
 
-# -----------------------
-# Render helpers
-# -----------------------
-def render_header():
-    return Panel(Text(header, justify="center", style="bold cyan"), title="STATUS")
+    # -----------------------
+    # Layout
+    # -----------------------
+    layout = Layout()
+    layout.split_column(
+        Layout(name="header", size=3),
+        Layout(name="body"),
+    )
+    layout["body"].split_row(
+        Layout(name="log_a"),
+        Layout(name="log_b"),
+        Layout(name="log_c"),
+    )
 
-def render_log(title, data, color):
-    table = Table.grid()
-    for line in data:
-        table.add_row(f"[{color}]{line}[/{color}]")
-    return Panel(table, title=title, border_style=color)
+    for i in range(25):
+        logs["b"].append(f"{i} : ")
 
-# -----------------------
-# Start worker
-# -----------------------
-log_queue = Queue()
-p = Process(target=worker, args=(log_queue,), daemon=True)
-p.start()
+    # -----------------------
+    # Render helpers
+    # -----------------------
+    def render_header():
+        return Panel(header, title="STATUS")
 
-# -----------------------
-# Live UI loop
-# -----------------------
-with Live(layout, refresh_per_second=10, screen=True):
-    while True:
-        # Drain queue (NON-BLOCKING)
-        while not log_queue.empty():
-            key, message = log_queue.get()
-            logs[key].append(message)
+    def render_log(title, data, color):
+        table = Table.grid()
+        for line in data:
+            table.add_row(f"{line}")
+        return Panel(table, title=title, border_style=color)
 
-        header = f"Total logs: {sum(len(v) for v in logs.values())}"
+    # -----------------------
+    # Start worker
+    # -----------------------
+    # log_queue = Queue()
+    # p = Process(target=worker, args=(log_queue,), daemon=True)
+    # p.start()
 
-        layout["header"].update(render_header())
-        layout["log_a"].update(render_log("FETCH", logs["a"], "green"))
-        layout["log_b"].update(render_log("PARSE", logs["b"], "yellow"))
-        layout["log_c"].update(render_log("INDEX", logs["c"], "magenta"))
+    # -----------------------
+    # Live UI loop
+    # -----------------------
+    with Live(layout, refresh_per_second=10, screen=True):
+        while True:
+            # Drain queue (NON-BLOCKING)
+            while not log_queue.empty():
+                key, message = log_queue.get()
+                if key == "header":
+                    header = message
+                elif isinstance(key, int):
+                    logs["b"][key] = f"{key} : {message}"
+                else:
+                    logs[key].append(message)
 
-        time.sleep(0.5)
+            # header = f"Total logs: {sum(len(v) for v in logs.values())}"
+
+            layout["header"].update(render_header())
+            layout["log_a"].update(render_log("MAIN", logs["a"], "green"))
+            layout["log_b"].update(render_log("WORKERS", logs["b"], "yellow"))
+            layout["log_c"].update(render_log("DATABASE", logs["c"], "magenta"))
+
+            time.sleep(0.1)
