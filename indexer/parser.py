@@ -14,7 +14,7 @@ from nltk.corpus import wordnet
 
 data_manager = dbm()
 
-resources = ['corpora/stopwords','tokenizers/punkt','tokenizers/punkt_tab', 'wordnet']
+resources = {'corpora/stopwords' : 'stopwords','tokenizers/punkt':'punkt','tokenizers/punkt_tab':'punkt_tab', 'wordnet':'wordnet'}
 
 for resource_name in resources :
     try:
@@ -23,7 +23,7 @@ for resource_name in resources :
     except LookupError as e:
         # print(e)
         print(f"'{resource_name}' not found. You can download it using nltk.download('{resource_name}')")
-        nltk.download(resource_name)
+        nltk.download(resources[resource_name])
 
 # Get English stopwords and tokenize
 stop_words = set(stopwords.words('english'))
