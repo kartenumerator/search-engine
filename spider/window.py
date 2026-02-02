@@ -7,29 +7,11 @@ from rich.table import Table
 from rich.text import Text
 import time
 
-# -----------------------
-# Worker process
-# -----------------------
-def worker(log_queue: Queue):
-    i = 1
-    while True:
-        log_queue.put(("a", f"Fetcher event {i}"))
-        if i % 2 == 0:
-            log_queue.put(("b", f"Parser event {i}"))
-        if i % 3 == 0:
-            log_queue.put(("c", f"Indexer event {i}"))
-        i += 1
-        time.sleep(0.05)
-
-# -----------------------
-# UI state (main process)
-# -----------------------
-
-def main(log_queue: Queue):
+def main(log_queue: Queue, CONCURRENT_REQUESTS: int):
     header = "Starting..."
     logs = {
         "a": deque(maxlen=50),
-        "b": deque(maxlen=25),
+        "b": deque(maxlen=CONCURRENT_REQUESTS),
         "c": deque(maxlen=50),
     }
 
@@ -47,8 +29,8 @@ def main(log_queue: Queue):
         Layout(name="log_c"),
     )
 
-    for i in range(25):
-        logs["b"].append(f"{i} : ")
+    for i in range(CONCURRENT_REQUESTS):
+        logs["b"].append(f"{i+1} : ")
 
     # -----------------------
     # Render helpers
@@ -80,15 +62,15 @@ def main(log_queue: Queue):
                 if key == "header":
                     header = message
                 elif isinstance(key, int):
-                    logs["b"][key] = f"{key} : {message}"
+                    logs["b"][key] = f"{key+1} : {message}"
                 else:
                     logs[key].append(message)
 
             # header = f"Total logs: {sum(len(v) for v in logs.values())}"
 
             layout["header"].update(render_header())
-            layout["log_a"].update(render_log("MAIN", logs["a"], "green"))
+            layout["log_a"].update(render_log("MAIN", reversed(logs["a"]), "green"))
             layout["log_b"].update(render_log("WORKERS", logs["b"], "yellow"))
-            layout["log_c"].update(render_log("DATABASE", logs["c"], "magenta"))
+            layout["log_c"].update(render_log("DATABASE", reversed(logs["c"]), "magenta"))
 
             time.sleep(0.1)

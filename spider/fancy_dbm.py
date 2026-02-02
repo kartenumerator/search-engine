@@ -8,6 +8,8 @@ from schemas import (
     robots_schema,
 )
 from pymongo.errors import DuplicateKeyError, BulkWriteError
+import datetime
+from urllib.parse import urlparse
 
 
 class dbm:
@@ -16,6 +18,7 @@ class dbm:
         self.client = pymongo.MongoClient(host, port)
         self.db = self.client.search_engine
         self.log_queue = log_queue
+
 
         if "robots" not in self.db.list_collection_names():
             self.log_queue.put(
@@ -37,20 +40,38 @@ class dbm:
             self.db.urls_to_crawl.create_index(
                 urls_to_crawl_index, unique=True
             )
+            self.db.urls_to_crawl.create_index({"upload_time":pymongo.ASCENDING})
             self.log_queue.put(("c", str(result)))
 
-        if "crawled_urls" not in self.db.list_collection_names():
-            self.log_queue.put(
-                ("c", "Creating crawled_urls collection with schema validation")
-            )
-            result = self.db.create_collection(
-                "crawled_urls", validator=crawled_urls_schema
-            )
-            self.db.crawled_urls.create_index(
-                crawled_urls_index, unique=True
-            )
-            self.log_queue.put(("c", str(result)))
+        # if "crawled_urls" not in self.db.list_collection_names():
+        #     self.log_queue.put(
+        #         ("c", "Creating crawled_urls collection with schema validation")
+        #     )
+        #     result = self.db.create_collection(
+        #         "crawled_urls", validator=crawled_urls_schema
+        #     )
+        #     self.db.crawled_urls.create_index(
+        #         crawled_urls_index, unique=True
+        #     )
+        #     self.log_queue.put(("c", str(result)))
 
+        if "pages" not in self.db.list_collection_names():
+            self.db.create_collection("pages", validator={
+                        '$jsonSchema': {
+                            'bsonType': 'object',
+                            'additionalProperties': True,
+                            'required': ['url','html'],
+                            'properties': {
+                                'url':{'bsonType':'string'},
+                                'html':{'bsonType':'string'},
+                                'status':{'bsonType':'int'},
+                                'title':{'bsonType':'string'},
+                                'meta_description':{'bsonType':'string'},          
+                            }
+                        }
+                    })
+            self.db.pages.create_index({'url':1}, unique=True)
+            self.log_queue.put(("c", "Created pages collection with schema validation"))
         self.crawled_urls = self.db.crawled_urls
         self.urls_to_crawl = self.db.urls_to_crawl
         self.robots = self.db.robots
@@ -67,36 +88,41 @@ class dbm:
 
     def add_urls_to_crawl(self, urls):
         try:
-            self.urls_to_crawl.insert_many(urls, ordered=False)
+            # docs = self.crawled_urls.find({"url":{"$in":urls}},{"url":1,"_id":0})
+            # existing = [doc["url"] for doc in docs]
+            self.urls_to_crawl.insert_many([{"url":u, "netloc":urlparse(u).hostname,"upload_time":self.urls_to_crawl.estimated_document_count()+1,"status":0} for u in urls], ordered=False)
             return None
         except BulkWriteError as err:
             # self.log_queue.put(
             #     ("c", "Duplicate URLs found while adding URLs to crawl")
             # )
-            return [
-                e["keyValue"]["url"]
-                for e in err.details.get("writeErrors", [])
-            ]
+            return None
         except Exception as e:
             self.log_queue.put(
                 ("c", f"[bold red]Error adding URLs to crawl: {e}[/bold red]")
             )
             return None
 
-    def retrieve_url(self):
+    def retrieve_url(self,overbooked_hosts):
         try:
-            doc = self.urls_to_crawl.find_one(
-                sort=[("upload_time", pymongo.ASCENDING)]
-            )
-            if doc:
-                self.urls_to_crawl.delete_one({"_id": doc["_id"]})
-                return doc["url"]
-            return None
+            doc = self.urls_to_crawl.find_one_and_update({"netloc":{"$nin":overbooked_hosts}, "status":0}, {"$set":{"status":1}}, sort=[("upload_time", pymongo.ASCENDING)], return_document=pymongo.ReturnDocument.AFTER)
+            # self.add_crawled_url(doc["url"])
+            if doc is None :
+                doc = self.urls_to_crawl.find_one_and_update({"netloc":{"$nin":overbooked_hosts}, "status":-1}, {"$set":{"status":1}}, sort=[("upload_time", pymongo.ASCENDING)], return_document=pymongo.ReturnDocument.AFTER)
+            
+            return doc["url"]
         except Exception as e:
             self.log_queue.put(
                 ("c", f"[bold red]Error retrieving URL to crawl: {e}[/bold red]")
             )
             return None
+
+    def add_pages(self, pages):
+        try :
+            self.db.pages.insert_many(pages,ordered=False)
+        except Exception as e:
+            self.log_queue.put(('c', f'[bold red]Error during adding crawled web pages to db : {e}[/bold red]'))
+    
 
     def retrieve_urls_to_crawl(self, limit=100):
         try:
@@ -125,27 +151,39 @@ class dbm:
             )
             return []
 
-    def add_crawled_url(self, netloc, path):
+    def add_crawled_url(self, url):
         try:
-            self.crawled_urls.insert_one(
-                {"netloc": netloc, "path": path}
-            )
+            parsed = urlparse(url)
+            # self.crawled_urls.insert_one(
+            #     {"url":url,"netloc": parsed.netloc, "path": parsed.path, "status":0}
+            # )
+            self.urls_to_crawl.update_one({"url":url},{"$set":{"status":2}})
             return None
         except Exception as e:
             self.log_queue.put(
-                ("c", f"[bold red]Error adding crawled URL {netloc}{path}: {e}[/bold red]")
+                ("c", f"[bold red]Error adding crawled URL {url}: {e}[/bold red]")
             )
 
-    def is_url_crawled(self, netloc, path):
+    def remove_crawled_url(self, url):
         try:
-            doc = self.crawled_urls.find_one(
-                {"netloc": netloc, "path": path},
-                {"_id": 1},
-            )
-            return doc is not None
+            # parsed = urlparse(url)
+            self.urls_to_crawl.update_one({"url":url},{"$set":{"status":-1}})
+            return None
         except Exception as e:
             self.log_queue.put(
-                ("c", f"[bold red]Error checking crawled URL {netloc}{path}: {e}[/bold red]")
+                ("c", f"[bold red]Error removing crawled URL {url}: {e}[/bold red]")
+            )
+
+    def is_url_crawled(self, url):
+        try:
+            doc = self.urls_to_crawl.find_one(
+                {"url": url},
+                {"_id": 0, "status": 1},
+            )
+            return doc is not None and doc["status"] == 2
+        except Exception as e:
+            self.log_queue.put(
+                ("c", f"[bold red]Error checking crawled URL {url}: {e}[/bold red]")
             )
             return False
 

@@ -3,3 +3,4 @@ spider/__pycache__/*
 venv/*
 log.txt
 db/*
+*/__pycache__/*
