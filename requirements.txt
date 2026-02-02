@@ -1,0 +1,7 @@
+aiohttp
+beautifulsoup4
+selectolax
+rich
+python-dotenv
+pymongo
+nltk
