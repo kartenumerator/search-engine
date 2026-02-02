@@ -1,217 +1,274 @@
+import random
 import aiohttp
 import asyncio
-import bs4
-from urllib.parse import urljoin,urlparse
-from urllib.robotparser import RobotFileParser
 import sqlite3
 import datetime
-from rich.live import Live
-from rich.console import Console
+from collections import defaultdict
+from urllib.parse import urljoin, urlparse
+from urllib.robotparser import RobotFileParser
+
+from selectolax.parser import HTMLParser
 from dbm import dbm
+
 import multiprocessing
 import time
-import traceback
 
-console = Console()
 content = ""
 
-manager = dbm("localhost",27017)
+# ================= CONFIG =================
 
-#TODO : add REDIS
-
-CONCURRENT_REQUESTS = 50
+CONCURRENT_REQUESTS = 70
+REQUEST_PER_HOST = 2
 
 crawled_urls = 0
-limit = 1000
-
-crawled_list = []
+limit = 10000
 
 robots = {}
 
-conn = sqlite3.connect('./db/crawledpages.db')
+# ================= SQLITE =================
+
+conn = sqlite3.connect("./db/crawledpages.db")
 cursor = conn.cursor()
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS pages (
-        id INTEGER PRIMARY KEY,
-        url TEXT NOT NULL,
-        html TEXT NOT NULL
-    )
-''')
+cursor.execute("PRAGMA journal_mode=WAL;")
+cursor.execute("PRAGMA synchronous=NORMAL;")
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS pages (
+    id INTEGER PRIMARY KEY,
+    url TEXT NOT NULL,
+    html TEXT NOT NULL
+)
+""")
+
+# ================= HTTP =================
+
 headers = {
     "User-Agent": "MyBot/1.0 (contact: tpg4m3risb3st@gmail.com)"
 }
 
-useragents =[
-    "MyBot/1.0 (contact: tpg4m3risb3st@gmail.com)",
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36"
-]
+# ================= DB MANAGER =================
 
-# urls = [
-#     "https://en.wikipedia.org/wiki/Gintama",
-#     # "https://iol.co.za/technology/2007-09-28-nintendo-wii-launches-in-south-africa/",
-#     # "https://en.wikipedia.org/wiki/File:Gee!!_I_wish_I_were_a_man,_I'd_join_the_Navy_Be_a_man_and_do_it_-_United_States_Navy_recruiting_station_-_-_Howard_Chandler_Christy_1917._LCCN2002712088.jpg"
-# ]
+manager = dbm("localhost", 27017)
 
-# urls = retrieve_urls_to_crawl(limit=50)
-semaphore = asyncio.Semaphore(200)
+# ================= CONCURRENCY =================
 
-async def get_robots(session, url,live):
-    global robots, headers
-    parsedjoinedurl = urlparse(url)
-    
-    def add_robot_to_db(netloc, file_content,live):
-        tmpmng = dbm("localhost",27017)
-        tmpmng.add_robot_file(netloc, file_content,live=live)
+semaphore = asyncio.Semaphore(CONCURRENT_REQUESTS)
+host_semaphores = defaultdict(lambda: asyncio.Semaphore(REQUEST_PER_HOST))
+host_workers = defaultdict(int)
 
-    try :
-        robots_response_text = manager.get_robot_file(parsedjoinedurl.netloc,live)
-        if robots_response_text is None:
-            # print("Not in db")
-            async with session.get(f"{parsedjoinedurl.scheme}://{parsedjoinedurl.netloc}/robots.txt", headers=headers) as robots_response:
-                # print(robots_response.status)
-                if robots_response.status == 200:
-                    robots_response_text = await robots_response.text()
-                    
-                    if parsedjoinedurl.netloc in robots:
-                        return
-                    p = multiprocessing.Process(target=add_robot_to_db, args=(parsedjoinedurl.netloc, robots_response_text,live))
-                    p.start()
-                    # rp = RobotFileParser()
-                    # rp.parse(robots_response_text.splitlines())
-                    # robots[parsedjoinedurl.netloc] = rp
-                    
+overbooked_hosts = set()
+overbooked_lock = asyncio.Lock()
+
+active_workers = 0
+
+# ================= ROBOTS =================
+
+async def get_robots(session, url):
+    parsed = urlparse(url)
+
+    def add_robot_to_db(netloc, content):
+        tmp = dbm("localhost", 27017)
+        tmp.add_robot_file(netloc, content)
+
+    try:
+        robots_txt = manager.get_robot_file(parsed.netloc)
+        if robots_txt is None:
+            async with session.get(
+                f"{parsed.scheme}://{parsed.netloc}/robots.txt",
+                headers=headers
+            ) as r:
+                if r.status == 200:
+                    robots_txt = await r.text()
+                    multiprocessing.Process(
+                        target=add_robot_to_db,
+                        args=(parsed.netloc, robots_txt)
+                    ).start()
                 else:
+                    robots_txt = ""
+                    multiprocessing.Process(
+                        target=add_robot_to_db,
+                        args=(parsed.netloc, "")
+                    ).start()
 
-                    if parsedjoinedurl.netloc in robots:
-                        return
-                    p = multiprocessing.Process(target=add_robot_to_db, args=(parsedjoinedurl.netloc, ""))
-                    p.start()
-                    # print("No robots file")
-                    robots_response_text = ""
-
-        if robots_response_text == "":
-            robots[parsedjoinedurl.netloc] = None
-        else:
+        if robots_txt:
             rp = RobotFileParser()
-            rp.parse(robots_response_text.splitlines())
-            robots[parsedjoinedurl.netloc] = rp
-                
+            rp.parse(robots_txt.splitlines())
+            robots[parsed.netloc] = rp
+        else:
+            robots[parsed.netloc] = None
+
     except Exception as e:
-        # print(f"Error fetching robots.txt for {url}: {e}.")
-        robots[parsedjoinedurl.netloc] = None
+        print(f"[ROBOTS ERROR] {parsed.netloc}: {e}")
+        robots[parsed.netloc] = None
 
-async def fetch_data(session,live):
+# ================= SQLITE WRITER =================
 
-    global headers,limit,robots,semaphore,crawled_urls,conn,cursor,manager,crawled_list
+sqlite_queue = asyncio.Queue()
 
-    while(crawled_urls) < limit:
+async def sqlite_worker(batch_size=100, flush_interval=1.0):
+    buffer = []
+    last_flush = time.time()
+
+    while True:
+        try:
+            url, html = await asyncio.wait_for(
+                sqlite_queue.get(),
+                timeout=flush_interval
+            )
+            buffer.append((url, html))
+            sqlite_queue.task_done()
+        except asyncio.TimeoutError:
+            pass
+
+        if buffer and (
+            len(buffer) >= batch_size or
+            time.time() - last_flush >= flush_interval
+        ):
+            cursor.executemany(
+                "INSERT INTO pages (url, html) VALUES (?, ?)",
+                buffer
+            )
+            conn.commit()
+            buffer.clear()
+            last_flush = time.time()
+
+# ================= FETCH WORKER =================
+
+async def fetch_data(session, wid):
+    global crawled_urls, active_workers
+
+    active_workers += 1
+
+    while crawled_urls < limit:
         urls = []
 
-        url = manager.retrieve_url(live)
-        # print(url)
+        url = manager.retrieve_url(list(overbooked_hosts))
         if url is None:
-            print("No URL to crawl, exiting")
-            return 
-        print(f"Starting task: {url}")
-        data = ""
+            print("[INFO] No URL to crawl, worker exiting")
+            active_workers -= 1
+            return
+
+        current = urlparse(url)
+
+        host_workers[current.netloc] += 1
+        async with overbooked_lock:
+            if host_workers[current.netloc] >= REQUEST_PER_HOST:
+                overbooked_hosts.add(current.netloc)
+
+        # print(f"[{wid}] START {url}")
+
         async with semaphore:
-            try:
-                # await asyncio.sleep(0.5)
-                async with session.get(url, headers=headers) as response:
-                    data = await response.text()
+            async with host_semaphores[current.netloc]:
+                try:
+                    async with session.get(
+                        url,
+                        allow_redirects=True,
+                        headers=headers
+                    ) as response:
 
-                    if response.status == 200:
-                        # limit -= 1
-                        crawled_urls += 1
-                        update_content(live)
+                        if response.status == 403:
+                            print(f"[RATE LIMITED] {url}")
+                            await asyncio.sleep(5)
 
-                        cursor.execute("INSERT INTO pages (url, html) VALUES (?, ?)", (url, data))
-                        conn.commit()
+                        elif response.status == 200:
+                            html = await response.text()
+                            crawled_urls += 1
+                            print(f"[{wid}] OK {url} | total={crawled_urls}")
 
-                        soup = bs4.BeautifulSoup(data, 'html.parser')
+                            await sqlite_queue.put((url, html))
 
-                        robot_tasks = []
-                        retrieving_robots = []
-                        extracted_links = []
+                            tree = HTMLParser(html)
 
-                        for link in soup.find_all('a'):
-                            parsedjoinedurl = urlparse(urljoin(url, link.get('href')))
-                            if parsedjoinedurl.scheme not in ("http","https") or "wikipedia" not in parsedjoinedurl.netloc:
-                                continue
-                            else :
-                                # print(newurl)joined_url
-                                newurl = f"{parsedjoinedurl.scheme}://{parsedjoinedurl.netloc}{parsedjoinedurl.path}"
-                                if not manager.is_url_crawled(parsedjoinedurl.netloc, parsedjoinedurl.path,live) and newurl not in urls and newurl not in crawled_list:
-                                    # print(robots)
-                                    if parsedjoinedurl.netloc not in robots:
-                                        # print(f"Retrieving robots file for {parsedjoinedurl.scheme}://{parsedjoinedurl.netloc}/robots.txt") 
-                                        extracted_links.append(newurl)
-                                        if parsedjoinedurl.netloc not in retrieving_robots:
-                                            robot_tasks.append(get_robots(session, newurl,live))
+                            for node in tree.css("a"):
+                                href = node.attrs.get("href")
+                                if not href:
+                                    continue
 
-                                        retrieving_robots.append(parsedjoinedurl.netloc)
+                                parsed = urlparse(urljoin(url, href))
+                                if parsed.scheme not in ("http", "https"):
+                                    continue
 
-                                    elif robots[parsedjoinedurl.netloc] is None or robots[parsedjoinedurl.netloc].can_fetch('*', parsedjoinedurl.path):
-                                        if(len(urls)+crawled_urls>=limit):
-                                            break
-                                        crawled_list.append(newurl)
-                                        urls.append(newurl)
-                                        
-                        if len(robot_tasks) > 0:
-                            await asyncio.gather(*robot_tasks)
-                            for link in extracted_links:
-                                if(len(urls)+crawled_urls>=limit):
-                                    break
-                                parsedjoinedurl = urlparse(link)
-                                
-                                if link not in crawled_list and link not in urls and (robots[parsedjoinedurl.netloc] is None or robots[parsedjoinedurl.netloc].can_fetch('*', parsedjoinedurl.path)):
-                                    urls.append(link)
-                                    crawled_list.append(link)
-                    else:
-                        print(f"Couldnt retrieve {url} | status {response.status}")
-                        # headers["User-Agent"] = useragents[0 if headers["User-Agent"] == useragents[1] else 1]
-            except Exception as e:
-                print(f"Error fetching {url}: {e}.")
-                traceback.print_exc()
-        
+                                newurl = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
 
-        print(f"Completed task: {url}")
-        # urls.remove(url)
-        # completed_urls.append(url)
-        currenturl = urlparse(url)
+                                if manager.is_url_crawled(parsed.netloc, parsed.path):
+                                    continue
 
-        # t = time.time_ns()
-        # tmpmng = dbm("localhost",27017)
-        ret = manager.add_urls_to_crawl(urls=[{'url': u, 'upload_time': datetime.datetime.now()} for u in urls],live=live)
-        if ret is not None :
-            crawled_list.extend(ret)
-        manager.add_crawled_url(currenturl.netloc, currenturl.path,live)
-        
-        # print(f"DB updated in {time.time_ns()-t} ns")
-        
-        # manager.add_urls_to_crawl(urls=[{'url': u, 'upload_time': datetime.datetime.now()} for u in urls])
-        # manager.add_crawled_url(currenturl.netloc, currenturl.path)
-        # return data
+                                if newurl not in urls:
+                                    if crawled_urls + len(urls) >= limit:
+                                        break
+                                    urls.append(newurl)
 
-def update_content(live):
-    global content,crawled_urls,limit
-    content = f"Crawled URLs: [bold green]{crawled_urls}[/bold green] | Remaining limit: [bold red]{limit}[/bold red]"
-    live.update(content)
+                        else:
+                            print(f"[{wid}] FAIL {url} status={response.status}")
+
+                except asyncio.TimeoutError:
+                    print(f"[TIMEOUT] {url}")
+                    host_workers[current.netloc] = 999
+                    async with overbooked_lock:
+                        overbooked_hosts.add(current.netloc)
+
+                except Exception as e:
+                    print(f"[ERROR] {url}: {e}")
+
+        host_workers[current.netloc] -= 1
+        async with overbooked_lock:
+            if (
+                current.netloc in overbooked_hosts and
+                host_workers[current.netloc] < REQUEST_PER_HOST
+            ):
+                overbooked_hosts.remove(current.netloc)
+
+        if urls:
+            manager.add_urls_to_crawl([
+                {
+                    "url": u,
+                    "netloc": urlparse(u).netloc,
+                    "upload_time": datetime.datetime.now()
+                }
+                for u in urls
+            ])
+
+        manager.add_crawled_url(current.netloc, current.path)
+
+        # print(f"[{wid}] DONE {url}")
+        print(crawled_urls)
+
+    active_workers -= 1
+
+# ================= MAIN =================
 
 async def main():
-    global limit,content
-    # tasks = [fetch_data(url) for url in urls]
-    # print("Tasks created, starting to gather results...")
-    # results = await asyncio.gather(*tasks)
-    # print(f'at the start {retrieve_url()}')
-    with Live(console=console, screen=False, vertical_overflow="crop") as live:
-        async with aiohttp.ClientSession() as session:
-            # start_time = time.time()
-            tasks = [fetch_data(session,live) for i in range(CONCURRENT_REQUESTS)]
-            await asyncio.gather(*tasks)
-            
-            print("Tasks completed, processing results...")
-            live.update(content)
+    asyncio.create_task(sqlite_worker())
 
-if __name__ == '__main__':
+    connector = aiohttp.TCPConnector(
+        limit=CONCURRENT_REQUESTS,
+        limit_per_host=5,
+        ttl_dns_cache=300,
+        keepalive_timeout=60
+    )
+
+    timeout = aiohttp.ClientTimeout(
+        total=60,
+        connect=20,
+        sock_read=40
+    )
+
+    async with aiohttp.ClientSession(
+        connector=connector,
+        timeout=timeout,
+        headers=headers
+    ) as session:
+
+        tasks = [
+            fetch_data(session, i)
+            for i in range(CONCURRENT_REQUESTS)
+        ]
+
+        await asyncio.gather(*tasks)
+
+    print("[DONE] All tasks finished")
+
+# ================= ENTRY =================
+
+if __name__ == "__main__":
     asyncio.run(main())

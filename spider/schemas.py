@@ -9,8 +9,13 @@ urls_to_crawl_schema = {
                         'url': {
                             'bsonType': 'string'
                         },
+                        'netloc':{'bsonType':'string'},
+                        'status':{
+                            'bsonType':'int',
+                            'description':'0 : uncrawled, 1:crawling, 2:crawled'
+                        },
                         'upload_time': {
-                            'bsonType': 'date'
+                            'bsonType': 'int'
                         }
                     }
                 }
@@ -23,17 +28,25 @@ crawled_urls_schema = {
                     'additionalProperties': True,
                     'required': ['netloc', 'path'],
                     'properties': {
+                        'url':{
+                            'bsonType':'string'
+                        },
                         'netloc': {
                             'bsonType': 'string'
                         },
                         'path': {
                             'bsonType': 'string',
                             'description': 'Set to default value'
+                        },
+                        'status':{
+                            'bsonType':'int',
+                            'description':'0 : unindexed, 1:indexing, 2:indexed'
                         }
                     }
                 }
             }
 crawled_urls_index = {"netloc": ASCENDING, "path": ASCENDING}
+
 robots_schema = {
                 '$jsonSchema': {
                     'bsonType': 'object',
