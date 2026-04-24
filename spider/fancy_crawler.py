@@ -1,3 +1,4 @@
+
 import random
 import aiohttp
 import asyncio
@@ -8,19 +9,30 @@ import sqlite3
 import datetime
 from collections import defaultdict
 
+# from rich.pretty import data
+from pymongo import response
 from selectolax.parser import HTMLParser
 
 from rich.console import Console
 from fancy_dbm import dbm
 import multiprocessing
-
+import mimetypes
 import time
-import traceback
+import traceback 
 import window
 import signal
-
+import json
 import os
+import sys
 
+# Get the absolute path to the parent directory
+parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+# Add it to the list of places Python looks for modules
+sys.path.append(parent_dir)
+
+
+import helper
 from dotenv import load_dotenv
 
 content = ""
@@ -30,31 +42,19 @@ load_dotenv()
 
 #TODO : add REDIS
 
-CONCURRENT_REQUESTS = 60
-REQUEST_PER_HOST = 1
+CONCURRENT_REQUESTS = 50
+REQUEST_PER_HOST = 2
 
 crawled_urls = 0
 limit = 100000
 
-# crawled_list = []
-
 robots = {}
 
-# conn = sqlite3.connect(os.getenv("SQLITE_PATH"))
-# cursor = conn.cursor()
-# cursor.execute("PRAGMA journal_mode=WAL;")
-# cursor.execute("PRAGMA synchronous=NORMAL;")
-
-# cursor.execute('''
-#     CREATE TABLE IF NOT EXISTS pages (
-#         id INTEGER PRIMARY KEY,
-#         url TEXT NOT NULL,
-#         html TEXT NOT NULL
-#     )
-# ''')
-
 headers = {
-    "User-Agent": "MyBot/1.0 (contact: tpg4m3risb3st@gmail.com)"
+    "User-Agent": "MyBot/1.0 (contact: tpg4m3risb3st@gmail.com)",
+    'Accept': 'text/html',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'Connection': 'keep-alive'
 }
 
 useragents =[
@@ -64,22 +64,61 @@ useragents =[
 
 log_queue = multiprocessing.Queue()
 manager = dbm(os.getenv("MONGO_HOST"),int(os.getenv("MONGO_PORT")),log_queue=log_queue)
-# urls = [
-#     "https://en.wikipedia.org/wiki/Gintama",
-#     # "https://iol.co.za/technology/2007-09-28-nintendo-wii-launches-in-south-africa/",
-#     # "https://en.wikipedia.org/wiki/File:Gee!!_I_wish_I_were_a_man,_I'd_join_the_Navy_Be_a_man_and_do_it_-_United_States_Navy_recruiting_station_-_-_Howard_Chandler_Christy_1917._LCCN2002712088.jpg"
-# ]
 
-# urls = retrieve_urls_to_crawl(limit=50)
 semaphore = asyncio.Semaphore(CONCURRENT_REQUESTS)
 host_semaphores = defaultdict(lambda: asyncio.Semaphore(REQUEST_PER_HOST))
 host_workers = defaultdict(int)
-overbooked_hosts = set()
-overbooked_lock = asyncio.Lock()
-
-# retrieve_lock = asyncio.Lock()
+overbooked_hosts = {}
 
 active_workers = 0
+
+# log_json = {}
+# with open("data.json", "r") as infile:
+#     log_json = json.load(infile)
+
+urlsqueue = multiprocessing.Queue()
+def fetch_url_worker(manager, urlsqueue : multiprocessing.Queue):
+    while True :
+        if urlsqueue.qsize() < 2*CONCURRENT_REQUESTS:
+            pipeline = [
+                {
+                    "$match": {
+                        "status": 0   # filter first
+                    }
+                },
+                {
+                    "$sort":{
+                        "upload_time":-1
+                    }
+                }
+                ,{
+                    "$group": {
+                        "_id": "$netloc",
+                        "doc": {"$first": "$$ROOT"}
+                    }
+                },
+                {
+                    "$replaceRoot": {"newRoot": "$doc"}
+                },
+                {
+                    "$project": {
+                        "url": 1,
+                    }
+                },
+                {
+                    "$limit": 2*CONCURRENT_REQUESTS
+                }
+            ]
+
+            docs = list(manager.db.urls_to_crawl.aggregate(pipeline))
+            manager.db.urls_to_crawl.update_many({'url':{'$in':docs}}, {'$set':{'status':1}})
+            # manager.db.hosts.update_many({"netloc":{"$in":docs}},{"$inc":{"total":1}}, upsert=True)
+            # docs = manager.retrieve_urls_to_crawl(limit=1000, overbooked_hosts=[])
+            # print("fetched")
+            for doc in docs :
+                urlsqueue.put(doc['url'])
+        # time.sleep(0.1)
+
 
 async def get_robots(session, url):
     global robots, headers
@@ -129,9 +168,11 @@ async def get_robots(session, url):
 sqlite_queue = asyncio.Queue()
 
 async def sqlite_worker(batch_size=100, flush_interval=5.0):
+    # global log_json
+
     buffer = []
     last_flush = time.time()
-
+    
     try :
         while True:
             try:
@@ -143,6 +184,10 @@ async def sqlite_worker(batch_size=100, flush_interval=5.0):
                 await asyncio.sleep(flush_interval)
                 # pass
 
+            for host in list(overbooked_hosts.keys()):
+                if time.time() - overbooked_hosts[host] > 300:  # 5 minutes cooldown
+                    host_workers[host] = 0
+                    del overbooked_hosts[host]
             # Flush conditions
             if (
                 not run.is_set() and 
@@ -150,7 +195,14 @@ async def sqlite_worker(batch_size=100, flush_interval=5.0):
                 (buffer and time.time() - last_flush >= flush_interval))
             ):
                 log_queue.put(("c","[bold green]Pushing to sqlite[/bold green]"))
+                # try :
+                #     with open("data.json", "w") as outfile:
+                #         json.dump(log_json, outfile)
+                # except Exception as e:
+                #     log_queue.put(("c",f"[red]Error writing log_json to file: {e}[/red]"))
+
                 manager.add_pages(buffer)
+                log_queue.put(("c","[bold green]Pushed to sqlite[/bold green]"))
                 # cursor.executemany(
                 #     "INSERT INTO pages (url, html) VALUES (?, ?)",
                 #     buffer
@@ -178,49 +230,100 @@ async def sqlite_worker(batch_size=100, flush_interval=5.0):
 
 
 
+
 run = asyncio.Event()
 
 async def fetch_data(session,id):
 
-    global headers,limit,robots,semaphore,crawled_urls,manager,log_queue,active_workers,overbooked_hosts,run
+    global headers,limit,robots,semaphore,crawled_urls,manager,log_queue,active_workers,overbooked_hosts,run, urlsqueue
 
     active_workers += 1
     while not run.is_set() and (crawled_urls) < limit:
-        urls = []
-
-        url = manager.retrieve_url(list(overbooked_hosts))
-
-        if url is None:
-            log_queue.put(("a", "[red]No URL to crawl, waiting for 5 seconds[/red]"))
-            active_workers -= 1
-            await asyncio.sleep(5)
-            continue
-        
-        currenturl = urlparse(url)
-        host_workers[currenturl.hostname] += 1
-        async with overbooked_lock :
-            if(host_workers[currenturl.hostname] >= REQUEST_PER_HOST) :
-                overbooked_hosts.add(currenturl.hostname)
-        log_queue.put((id, url))
-        log_queue.put(("a", f"Starting task: {url}"))
-        data = ""
         async with semaphore:
+            urls = []
+
+            # url = manager.retrieve_url(list(overbooked_hosts.keys()))
+            try :
+                log_queue.put((id,f'retrieving url'))
+                url = urlsqueue.get_nowait()
+                rejected = []
+                rejlocs = []
+                while urlparse(url).hostname in overbooked_hosts.keys() :
+                    log_queue.put(("a",f'overbooked url : {url}'))
+                    rejected.append(urls)
+                    rejlocs.append(urlparse(url).hostname)
+                    url = urlsqueue.get_nowait()
+                    await asyncio.sleep(1)
+                    # print(url)
+                if len(rejected) > 0 :
+                    manager.db.urls_to_crawl.update_many({'url':{'$in':rejected}}, {'$set':{'status':0}})
+                    # manager.db.hosts.update_many({"netloc":{"$in":rejlocs}}, {"$inc":{"toFtal":-1}})
+            except Exception as e:
+                log_queue.put(("a", "[red]No URL to crawl, waiting for 5 seconds[/red]"))
+                # active_workers -= 1
+                await asyncio.sleep(1)
+                continue
+            
+            currenturl = urlparse(url)
+            # reddit = False
+            # if currenturl.netloc == "www.reddit.com" :
+            #     reddit = True
+            #     if url[-1] == '/':
+            #         url = url[:-1]+'.json'
+            #     else :
+            #         url = url+'.json'
+            
+            host_workers[currenturl.hostname] += 1
+            if(host_workers[currenturl.hostname] >= REQUEST_PER_HOST) :
+                overbooked_hosts[currenturl.hostname] = time.time()
+            log_queue.put((id, url))
+            log_queue.put(("a", f"Starting task: {url}"))
+            data = ""
+            log_queue.put((id, f'[bold yellow]{url}[/bold yellow]'))
             async with host_semaphores[urlparse(url).hostname]:
                 try:
                     # await asyncio.sleep(0.5)
-
-                    log_queue.put((id, f'[bold yellow]{url}[/bold yellow]'))
+                    log_queue.put((id, f'[bold blue]{url}[/bold blue]'))
+        
                     async with session.get(url, allow_redirects=True,headers=headers) as response:
                         
-                        if response.status == 403:
+                        if response.status == 403 or response.status == 429:
                             log_queue.put(("a", f"[red]Rate limited by {url}[/red]"))
 
-                            manager.remove_crawled_url(url)
+                            manager.remove_crawled_url(url, True)
+                            host_workers[currenturl.netloc] = 51
+                            overbooked_hosts[currenturl.netloc] = time.time()
                             await asyncio.sleep(5)
                             # headers["User-Agent"] = useragents[0 if headers["User-Agent"] == useragents[1] else 1]
                         elif response.status == 200:
-                            data = await response.text()
+                            
+                            if not response.headers.get("Content-Type", "").lower().startswith("text/html"):
+                                log_queue.put((id, f'[bold red]{url}[/bold red]'))
+                                log_queue.put(("a", f"[red]Non-HTML content at {url}, skipping.[/red]"))
+                                manager.remove_crawled_url(url, False)
+                                continue
+                                
+                            # if not response.headers.get("Lan")
+
+                            manager.add_crawled_url(url=url)
+                            encoding = response.charset  # may be None
+                            # raw = await read_throttled(response, bandwidth_limiter)
+                            # data = raw.decode(encoding=encoding or 'utf-8', errors='replace')
+
+                            total = 0
+                            chunks = []
+                            async for chunk in response.content.iter_chunked(8192):
+                                total += len(chunk)
+                                if total > 4*1024*1024 :
+                                    log_queue.put(('c',f'[bold red]too big to handle {url}[/bold red]'))
+                                    raise ValueError("tooooo big")
+                                    
+                                chunks.append(chunk)
+                                
+                            raw = b"".join(chunks)
+                            data = raw.decode(encoding or "utf-8", errors="replace")
                             # limit -= 1
+
 
                             log_queue.put((id, f'[bold green]{url}[/bold green]'))
                             crawled_urls += 1
@@ -245,34 +348,38 @@ async def fetch_data(session,id):
                             
                             data = tree.body.text(separator='\n', strip=True)
 
-                            await sqlite_queue.put((url, data, title, meta_description))
+                            cleaned = [line for line in data.splitlines() if line.strip()]
+                            cleaneddata = "\n".join(cleaned)
+                            if ("anime" not in cleaneddata.lower() and "anime" not in title.lower() and "anime" not in meta_description.lower() and "ani" not in url.lower()) and ("manga" not in cleaneddata.lower() and "manga" not in title.lower() and "manga" not in meta_description.lower() and "manga" not in url.lower()): 
+                                # log_queue.put(("a", f"[red]Anime or Manga content not found in {url}[/red]"))
+                                continue
+                            
+                            if len(cleaneddata) > 100:  # Example threshold, adjust as needed
+        
+                                log_queue.put((id, f'[bold orange]{url}[/bold orange]'))
+                                await sqlite_queue.put((url, cleaneddata, title, meta_description))
+                                log_queue.put((id, f'[bold green]{url}[/bold green]'))
 
                             # soup = bs4.BeautifulSoup(data, 'html.parser')
 
                             robot_tasks = []
-                            retrieving_robots = []
                             extracted_links = []
 
                             for node in tree.css("a"):
                                 link = node.attrs.get("href")
                                 parsedjoinedurl = urlparse(urljoin(url, link))
-                                if parsedjoinedurl.scheme not in ("http","https"):
+                                if parsedjoinedurl.scheme not in ("http","https") or parsedjoinedurl.netloc == '' :
                                     continue
                                 else :
                                     # print(newurl)joined_url
                                     newurl = f"{parsedjoinedurl.scheme}://{parsedjoinedurl.netloc}{parsedjoinedurl.path}"
+                                    # mtype,encoding = mimetypes.guess_type(newurl)
+                                    # if mtype is not None and not mtype.startswith("text/html"):
+                                    #     continue
+                                    is_not_html, ext = helper.check_url_extension(newurl)
+                                    if is_not_html :
+                                        continue
                                     if not manager.is_url_crawled(newurl) and newurl not in urls:
-                                        # print(robots)
-                                        # if parsedjoinedurl.netloc not in robots:
-                                        #     # print(f"Retrieving robots file for {parsedjoinedurl.scheme}://{parsedjoinedurl.netloc}/robots.txt") 
-                                        #     if len(retrieving_robots) < 10:
-                                        #         extracted_links.append(newurl)
-                                        #         if parsedjoinedurl.netloc not in retrieving_robots:
-                                        #             robot_tasks.append(get_robots(session, newurl,))
-
-                                        #         retrieving_robots.append(parsedjoinedurl.netloc)
-
-                                        # elif robots[parsedjoinedurl.netloc] is None or robots[parsedjoinedurl.netloc].can_fetch('*', parsedjoinedurl.path):
                                         if(len(urls)+crawled_urls>=limit):
                                             break
                                         # crawled_list.append(newurl)
@@ -289,50 +396,62 @@ async def fetch_data(session,id):
                                         urls.append(link)
                                         # crawled_list.append(link)
                         else:
+                            if manager.remove_crawled_url(url, False) :
+                                host_workers[currenturl.netloc] = 51
+                                overbooked_hosts[currenturl.netloc] = time.time()
 
-                            manager.remove_crawled_url(url)
                             log_queue.put((id, f'[bold red]{url}[/bold red]'))
                             log_queue.put(("a", f"Couldnt retrieve {url} | status [red]{response.status}[/red]"))
                             # headers["User-Agent"] = useragents[0 if headers["User-Agent"] == useragents[1] else 1]
                 except asyncio.TimeoutError as e :
                     log_queue.put(("a", f"[red]Error fetching {url}: {e}.[/red]"))
                     log_queue.put(("c", f"[red]{url}[/red]"))
-                    manager.remove_crawled_url(url)
+                    # if currenturl.netloc in log_json:
+                    #     log_json[currenturl.netloc] += 1
+                    # else :
+                        # log_json[currenturl.netloc] = 1
+                    if manager.remove_crawled_url(url, False) :
+
+                        host_workers[currenturl.netloc] = 51
+                        overbooked_hosts[currenturl.netloc] = time.time()
                     
                     # host_workers[currenturl.netloc] = 51
                     # async with overbooked_lock:
-                    #     overbooked_hosts.add(currenturl.netloc)
+                    #     overbooked_hosts[currenturl.netloc] = time.time()
                 except Exception as e:
 
                     log_queue.put((id, f'[bold red]{url}[/bold red]'))
                     log_queue.put(("a", f"[red]Error fetching {url}: {e}.[/red]"))
 
-                    manager.remove_crawled_url(url)
+                    if manager.remove_crawled_url(url, False) :
+
+                        host_workers[currenturl.netloc] = 51
+                        overbooked_hosts[currenturl.netloc] = time.time()
                     # traceback.print_exc()
             
 
             log_queue.put(("a", f"[green]Completed task: {url}[/green]"))
             host_workers[currenturl.hostname] -= 1
-            async with overbooked_lock:
-                if currenturl.hostname in overbooked_hosts and host_workers[currenturl.hostname] < REQUEST_PER_HOST:
-                    overbooked_hosts.remove(currenturl.hostname)
+
+            if currenturl.hostname in overbooked_hosts and host_workers[currenturl.hostname] < REQUEST_PER_HOST:
+                del overbooked_hosts[currenturl.hostname]
             # urls.remove(url)
             # completed_urls.append(url)
 
             # t = time.time_ns()
             # tmpmng = dbm("localhost",27017)
             if len(urls) > 0:
-                ret = manager.add_urls_to_crawl(urls=urls)
+                ret = manager.add_urls_to_crawl(urls=urls, currhost=currenturl.hostname)
                 # if ret is not None :
                 #     crawled_list.extend(ret)
 
+        # print(f"{id} peace out.")
+        await asyncio.sleep(random.uniform(0.1,0.5))
                 
         
     active_workers -= 1
     log_queue.put((id, f''))
     log_queue.put(('a', f'{id} peace out'))
-    # print(f"{id} peace out.")
-    await asyncio.sleep(random.uniform(0.1, 0.5))
         # print(f"DB updated in {time.time_ns()-t} ns")
         
         # manager.add_urls_to_crawl(urls=[{'url': u, 'upload_time': datetime.datetime.now()} for u in urls])
@@ -355,7 +474,7 @@ def handle_interrupt(a,b):
     
 
 async def main():
-    global limit,content,headers,run
+    global limit,content,headers,run, active_workers
     # tasks = [fetch_data(url) for url in urls]
     # print("Tasks created, starting to gather results...")
     # results = await asyncio.gather(*tasks)
@@ -364,28 +483,41 @@ async def main():
 
     signal.signal(signalnum=signal.SIGINT, handler=handle_interrupt)
 
+    urlfetcher = multiprocessing.Process(target=fetch_url_worker, args=(manager,urlsqueue))
+    urlfetcher.start()
+
     display = multiprocessing.Process(target=window.main, args=(log_queue,CONCURRENT_REQUESTS), daemon=True)
     display.start()
     connector = aiohttp.TCPConnector(
         limit=CONCURRENT_REQUESTS,              # total open connections
-        limit_per_host=5,      # critical
+        limit_per_host=REQUEST_PER_HOST,      # critical
         ttl_dns_cache=300,
-        keepalive_timeout=60
+        keepalive_timeout=30
     )
 
     timeout = aiohttp.ClientTimeout(
-        total=60,
-        connect=20,
-        sock_read=40
+        total=30,
+        connect=10,
+        sock_read=20
     )
 
     writertask = asyncio.create_task(sqlite_worker())
     async with aiohttp.ClientSession(connector=connector, timeout=timeout, headers=headers) as session:
         # start_time = time.time()
-        tasks = [asyncio.create_task(fetch_data(session,i)) for i in range(CONCURRENT_REQUESTS)]
+        tasks = [asyncio.create_task(fetch_data(session,i), name=f'{i}') for i in range(CONCURRENT_REQUESTS)]
         try :
-            await asyncio.gather(*tasks)
-            log_queue.put(("a", "[green]Tasks completed, processing results...[/green]"))
+            while True :
+                flag = manager.check_flag_to_crawl()
+                while not flag :
+                    log_queue.put(("a", "[red]Crawling paused. Waiting for 1 minute before checking again...[/red]"))
+                    await asyncio.sleep(60)
+                    flag = manager.check_flag_to_crawl()
+
+                active_workers = 0
+                await asyncio.gather(*tasks)
+                log_queue.put(("a", "[green]Tasks completed, processing results...[/green]"))
+                # manager.set_flag_to_crawl(0)
+                break
         finally:
             # ---- CLEANUP ----
             # await asyncio.gather(*tasks, return_exceptions=True)
@@ -394,6 +526,10 @@ async def main():
             await sqlite_queue.join()
 
             manager.client.close()
+
+            if urlfetcher.is_alive() :
+                urlfetcher.terminate()
+                urlfetcher.join()
 
             if display.is_alive():
                 display.terminate()

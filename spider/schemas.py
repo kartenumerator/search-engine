@@ -16,7 +16,10 @@ urls_to_crawl_schema = {
                         },
                         'upload_time': {
                             'bsonType': 'int'
-                        }
+                        },
+                        # 'priority':{
+                        #     'bsonType':'int'
+                        # }
                     }
                 }
             }

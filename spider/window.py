@@ -54,6 +54,11 @@ def main(log_queue: Queue, CONCURRENT_REQUESTS: int):
     # -----------------------
     # Live UI loop
     # -----------------------
+    # while True :
+    #     while not log_queue.empty() :
+    #         key,msg = log_queue.get()
+    #         if key == "header" or key == 'a':
+    #             print(msg)
     with Live(layout, refresh_per_second=10, screen=True):
         while True:
             # Drain queue (NON-BLOCKING)
