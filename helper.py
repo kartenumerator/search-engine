@@ -1,12 +1,8 @@
-# import pymongo
-
-# client = pymongo.MongoClient("mongodb://localhost:27017/")
-# db = client.search_engine
-# db.pages.update_many({}, {"$set": {"status": 0}})
-# # db.indexed_data.update_many({}, { "$unset": { "weight": "" } });
-import mimetypes
 import os
 from urllib.parse import urlparse
+import re
+
+
 def check_url_extension(url):
     # 1. Parse the URL to isolate the path
     parsed_url = urlparse(url)
@@ -17,8 +13,7 @@ def check_url_extension(url):
     
     # Standard web pages often have no extension, or end in .html, .htm, or .php
     html_extensions = {'.html', '.htm', '.php', '.asp', '.aspx'}
-    
-    if ext.lower() == '':
+    if ext == '':
         return False,ext
     for extnsn in html_extensions:
         if extnsn.lower() in ext.lower() :
@@ -28,7 +23,16 @@ def check_url_extension(url):
     #     return True, ext
     # else:
     return True, ext
+
+
+def check_only_english_alphanum_symbols(word):
+    # Regex: Allow letters, numbers, and common ASCII symbols
+    # This pattern covers standard ASCII 32-126
+    pattern = r'^[ -~]+$' 
     
-print(check_url_extension("https://tv.apple.com/us/show/captain-tsubasa/umc.cmc.325ab7yststhplpq6hf0bj7wj"))
-# mtype,encoding = mimetypes.guess_type("https://tougenanki-anime.com")
-# print(mtype,encoding)
+    # Alternatively, define specifically: letters, digits, and specific symbols
+    # pattern = r'^[a-zA-Z0-9!@#$%^&*()_+\-=\[\]{};\':"\\|,.<>\/?]+$'
+
+    if re.match(pattern, word):
+        return True
+    return False

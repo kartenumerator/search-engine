@@ -1,18 +1,23 @@
-import sqlite3
-import bs4
+import multiprocessing
+import time
 
 
-conn = sqlite3.connect('db/crawled_pages.db')
-cursor = conn.cursor()
-# query = "SELECT * FROM pages ORDER BY id DESC LIMIT 1"
-query = "SELECT html FROM pages WHERE url = 'https://www.freecodecamp.org/learn'"
-cursor.execute(query)
-last_row = cursor.fetchone() # Fetch the single resulting row
-# print(last_row[0])  # Print the HTML content
+q = multiprocessing.Queue()
 
-soup = bs4.BeautifulSoup(last_row[0], "lxml")
-for tag in soup.find_all(["script","style","nav","header","footer"]):
-    tag.decompose()
-# text = soup.getText(" ",strip=True)
-print(soup.prettify())
-conn.close()
+def p1(q:multiprocessing.Queue):
+    a = q.get()
+    print(a)
+
+def p2(q:multiprocessing.Queue):
+    time.sleep(5)
+    for i in range(5):
+        print("Sending hi from p2")
+        q.put("hi from p2")
+        print("Sent hi from p2")
+
+for i in range(5):
+    p = multiprocessing.Process(target=p1, args=(q,))
+    p.start()
+
+p2 = multiprocessing.Process(target=p2, args=(q,))
+p2.start()
