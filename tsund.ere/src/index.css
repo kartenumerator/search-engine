@@ -1,33 +1,67 @@
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Manrope:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Manrope:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap');
 @import "tailwindcss";
 
-@theme {
+:root {
   --font-headline: "Space Grotesk", sans-serif;
   --font-body: "Manrope", sans-serif;
   --font-mono: "JetBrains Mono", monospace;
+  --font-serif: "Playfair Display", serif;
 
   --color-bg: #050505;
   --color-ink: #f0f0f0;
   --color-accent: #ff007a;
   --color-glass-surface: rgba(255, 255, 255, 0.05);
   --color-glass-border: rgba(255, 255, 255, 0.1);
+  --color-shadow: rgba(0, 0, 0, 0.8);
+}
+
+.theme-newspaper {
+  --font-headline: "Playfair Display", serif;
+  --font-body: "Playfair Display", serif;
+  --font-mono: "JetBrains Mono", monospace;
+
+  --color-bg: #f4f1ea;
+  --color-ink: #1a1a1a;
+  --color-accent: #2b6cb0; /* Brighter Royal Blue */
+  --color-glass-surface: rgba(0, 0, 0, 0.05);
+  --color-glass-border: rgba(0, 0, 0, 0.2);
+  --color-shadow: rgba(0, 0, 0, 0.1);
+}
+
+@theme {
+  --font-headline: var(--font-headline);
+  --font-body: var(--font-body);
+  --font-mono: var(--font-mono);
+  --font-serif: var(--font-serif);
+
+  --color-bg: var(--color-bg);
+  --color-ink: var(--color-ink);
+  --color-accent: var(--color-accent);
+  --color-glass-surface: var(--color-glass-surface);
+  --color-glass-border: var(--color-glass-border);
 }
 
 @layer base {
   body {
-    @apply bg-bg text-ink font-body min-h-screen overflow-x-hidden selection:bg-accent/40;
+    @apply bg-bg text-ink font-body min-h-screen overflow-x-hidden selection:bg-accent/30;
+    /* Classy Midnight Obsidian Gradient - Only for default dark theme */
     background: 
-      radial-gradient(at 0% 0%, rgba(255, 0, 122, 0.15) 0, transparent 50%), 
-      radial-gradient(at 100% 0%, rgba(0, 122, 255, 0.15) 0, transparent 50%), 
-      radial-gradient(at 100% 100%, rgba(122, 0, 255, 0.15) 0, transparent 50%), 
-      radial-gradient(at 0% 100%, rgba(0, 255, 255, 0.1) 0, transparent 50%),
-      linear-gradient(135deg, #050505 0%, #150a1a 50%, #050505 100%);
+      radial-gradient(at 0% 0%, rgba(255, 255, 255, 0.05) 0, transparent 50%),
+      radial-gradient(at 100% 0%, rgba(255, 0, 122, 0.1) 0, transparent 50%),
+      linear-gradient(to bottom, #0f0f12 0%, #050505 100%);
+    background-attachment: fixed;
+  }
+
+  body.theme-newspaper {
+    background: 
+      url('https://www.transparenttextures.com/patterns/natural-paper.png'),
+      #f4f1ea;
     background-attachment: fixed;
   }
 }
 
 .glass-morphism {
-  @apply backdrop-blur-xl bg-glass-surface border border-glass-border;
+  @apply backdrop-blur-2xl bg-glass-surface border border-glass-border shadow-[0_8px_32px_0_var(--color-shadow)];
 }
 
 .custom-scrollbar::-webkit-scrollbar {
@@ -37,6 +71,6 @@
   background: transparent;
 }
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
   border-radius: 10px;
 }

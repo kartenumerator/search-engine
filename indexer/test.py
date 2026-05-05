@@ -1,21 +1,34 @@
 from dbm import dbm
-
+from urllib.parse import urlparse
 from pymongo import UpdateMany, UpdateOne
 # for i in range(0,457, 100):
 #     print(i)
 m = dbm()
 
-words = []
-lowwords = []
-with open("uselesswords.txt","r") as f:
-    txt = f.read()
-    words = txt.splitlines()
-    lowwords = txt.lower().splitlines()
+idx = 0
+BATCH_SIZE = 2000000
+uniq = set()
+ops = set()
+while True :
+    print(f"At {idx*BATCH_SIZE}")
+    docs = list(m.db.indexed_data.find({}).limit(BATCH_SIZE).skip(idx*BATCH_SIZE))
+    for doc in docs :
+        # if urlparse(doc['url']).hostname == 'comix.to':
+        #     ops.add(doc['url'])
+        uniq.add(doc['url'])
+    if len(ops) > 0:
+        print(f'updating {len(ops)} comix urls')
+        m.db.indexed_data.update_many({"url":{"$in":list(ops)}}, {"$mul":{"tf":0.2}})
+        ops = set()
+    print(len(uniq))
+    idx += 1
+    if len(docs) < BATCH_SIZE :
+        print("done")
+        break
 
-res = m.db.indexed_data.delete_many({"word":{"$in":words}})
-print(res)
-res2 = m.db.indexed_data.update_many({"word":{"$in":lowwords}},{"$mul":{"tf":2}})
-print(res2)
+with open("allurls.txt", "a") as f:
+    for url in uniq :
+        f.write(f'{url}\n')
 # ops = []
 # idx = 0
 # for i in range(0,len(words),1000) :

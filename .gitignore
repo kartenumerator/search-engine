@@ -1,9 +1,11 @@
 .vscode/*
 # spider/__pycache__/*
 venv/*
-log.txt
+*.txt
 db/*
 */__pycache__/*
 */node_modules
 __pycache__
 uselesswords.txt
+*.rdb
+.env

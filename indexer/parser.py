@@ -1,3 +1,5 @@
+import multiprocessing
+
 import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
@@ -11,7 +13,9 @@ import time
 
 from urllib.parse import urlparse
 import sys
-import os 
+import os
+
+from sympy import ordered 
 
 parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
@@ -27,7 +31,7 @@ from multiprocessing import Process, Queue
 
 from functools import lru_cache
 
-@lru_cache(maxsize=100000)
+# @lru_cache(maxsize=100000)
 @lru_cache(maxsize=100000)
 def lemmatize_cached(word, tag):
     return lemmatizer.lemmatize(word, pos=tag)
@@ -66,37 +70,93 @@ lemmatizer = WordNetLemmatizer()
 
 db_actions_queue = Queue()
 
-def db_worker(db_actions_queue:Queue, pagequeue:Queue):
+writing = multiprocessing.Event()
+writing.clear()
+
+def pagefetcher(pagequeue:Queue, writing):
     data_manager = dbm()
+    onepage = 0
+    BATCH_SIZE = 500
     try :
         while True:
-            try :
-                action, params = db_actions_queue.get_nowait()
-                if action == "add_words":
-                    words, word_counts, url, total_words = params
-                    data_manager.add_words(words, word_counts, url, total_words)
-                elif action == "stop":
-                    break
-            except Exception as e :
-                print("no tasks")
-            
-            if pagequeue.qsize() < 50 :
+            if pagequeue.qsize() < BATCH_SIZE/2 :
                 print("fetching pages..")
-                docs = list(data_manager.db.pages.find({"status":0}, {"html":1,"url":1,"meta_description":1,"title":1}).limit(50))
+                docs = list(data_manager.db.pages.find({"status":onepage}, {"html":1,"url":1,"meta_description":1,"title":1}).limit(BATCH_SIZE))
                 urls = []
                 for doc in docs :
                     pagequeue.put(doc)
                     urls.append(doc['url'])
-                data_manager.db.pages.update_many({"url":{"$in":urls}}, {"$set":{"status":1}})
+
+                data_manager.db.pages.update_many({"url":{"$in":urls}}, {"$inc":{"status":-1}})
                 print("fetched pages...")
-                if len(docs) < 50 :
-                    print("No more pages to index..")
-                    if data_manager.get_flag_to_crawl() == 0 :
+                if len(docs) < BATCH_SIZE :
+                    while writing.is_set():
+                        print("fetcher waiting for writing ops to complete")
+                        time.sleep(5)
+                    onepage -= 1
+                    flag = data_manager.get_flag_to_crawl()
+                    print(f"No more pages to index now checking for status={onepage}..")
+                    if flag == 0 :
                         # print("Updating idf since crawler has paused.")
                         # data_manager.update_idf()
                         data_manager.set_flag_to_crawl(1)
-            time.sleep(0.5)
+                    elif flag == 2 :
+                        onepage = 0
+                        print("Waiting for crawler..")
+                        time.sleep(5)
+    except KeyboardInterrupt as e:
+        print(f"DB worker encountered an error: {e}, adding remaining tasks back to main queue.")
+        while db_actions_queue.empty() is False:
+            action, params = db_actions_queue.get()
+            if action == "add_words":
+                words, word_counts, url, total_words = params
+                data_manager.add_words(words, word_counts, url, total_words)
 
+
+def db_worker(db_actions_queue:Queue, writing):
+    data_manager = dbm()
+
+    def performaction(data_manager, idxops, wordops):
+        start = time.time_ns()
+        if len(wordops) > 0 :  
+            data_manager.db.words.bulk_write(wordops, ordered=False)
+        if len(idxops) > 0 :
+            data_manager.db.indexed_data.insert_many(idxops, ordered=False)
+            print(f'Writing took {(time.time_ns() - start)/1000000000} s')
+
+    try :
+        while True:
+            idxops = []
+            wordops = []
+            try :
+                docstoproc = 0
+                while True :
+                    action, params = db_actions_queue.get_nowait()
+                    if not writing.is_set() :
+                        writing.set()
+                    docstoproc += 1
+                    if action == "add_words":
+                        print(f"adding words for {docstoproc} documents..", end='\r')
+                        words, word_counts, url, total_words = params
+                        wo, io = data_manager.add_words(words, word_counts, url, total_words)
+                        if wo is not None :
+                            wordops.extend(wo)
+                        if io is not None :
+                            idxops.extend(io)
+                    elif action == "stop":
+                        break
+                    
+                    if docstoproc >= 1000 :
+                        performaction(data_manager, idxops, wordops)
+                        docstoproc = 0
+                        idxops = []
+                        wordops = []
+            except Exception as e :
+                performaction(data_manager, idxops, wordops)
+                writing.clear()
+                if len(wordops) > 0 :
+                    print(e)
+                continue
     except KeyboardInterrupt as e:
         print(f"DB worker encountered an error: {e}, adding remaining tasks back to main queue.")
         while db_actions_queue.empty() is False:
@@ -107,8 +167,11 @@ def db_worker(db_actions_queue:Queue, pagequeue:Queue):
 
 pagequeue = Queue()
 
-db_process = Process(target=db_worker, args=(db_actions_queue,pagequeue,))
-db_process.start()
+# db_process = Process(target=db_worker, args=(db_actions_queue,writing,))
+# db_process.start()
+
+fetcher = Process(target=pagefetcher, args=(pagequeue,writing,))
+fetcher.start()
 
 def process_url(url):
     parsed = urlparse(url)
@@ -192,8 +255,11 @@ while(True):
         data_manager.db.pages.delete_one({"_id": retrieved["_id"]})
         continue
 
-    db_actions_queue.put( ("add_words", (list(c.keys()), c, retrieved['url'],filtered_text+numtitle+nummeta)) )
-    # data_manager.add_words(list(c.keys()), c, retrieved['url'],filtered_text+numtitle+nummeta)
+    while db_actions_queue.full() :
+        print("Waiting for db queue to have space")
+        time.sleep(1)
+    # db_actions_queue.put( ("add_words", (list(c.keys()), c, retrieved['url'],filtered_text+numtitle+nummeta)) )
+    data_manager.add_words(list(c.keys()), c, retrieved['url'],filtered_text+numtitle+nummeta)
 
     print(retrieved['url'])
     print(f'Indexed | retrieval : {retrieval_time}s | processing : {complete_processing_time}s | adding_operations : {((time.time_ns()-start_time)/1000000000 - retrieval_time - complete_processing_time)}')
