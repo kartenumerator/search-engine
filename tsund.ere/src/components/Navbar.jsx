@@ -6,7 +6,7 @@ const Navbar = ({ onReset, theme, setTheme }) => {
   };
 
   return (
-    <nav className="fixed top-0 w-full z-50 flex justify-between items-center px-4 md:px-8 h-12 glass-morphism rounded-b-2xl border-t-0">
+    <nav className="fixed top-0 w-full z-50 flex justify-between items-center px-4 md:px-8 h-15 glass-morphism rounded-b-2xl border-t-0">
       <div className="flex items-center space-x-3 md:space-x-4">
         <h1 
           className="text-xs md:text-sm font-bold tracking-tighter uppercase cursor-pointer hover:text-accent transition-colors"
@@ -20,8 +20,7 @@ const Navbar = ({ onReset, theme, setTheme }) => {
         </div>
       </div>
       <div className="flex items-center space-x-4 md:space-x-12 text-[10px] md:text-xs font-bold uppercase tracking-[0.2em] md:tracking-[0.3em]">
-        <button className="hover:text-accent transition-colors cursor-pointer" onClick={onReset}>Archive</button>
-        <button className="hidden sm:block hover:text-accent transition-colors cursor-pointer">Manifesto</button>
+        <button className="hidden sm:block hover:text-accent transition-colors cursor-pointer">Documentation</button>
         <div 
           onClick={toggleTheme}
           className={`w-8 h-8 rounded-full shadow-lg flex items-center justify-center hover:scale-110 transition-transform cursor-pointer ${theme === 'newspaper' ? 'bg-accent text-white border-2 border-accent' : 'glass-morphism'}`}
