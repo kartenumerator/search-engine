@@ -1,23 +1,26 @@
-import multiprocessing
-import time
+import datetime
+from dbm import dbm
+import os
+from urllib.parse import urlparse
 
+m = dbm("localhost",27017)
 
-q = multiprocessing.Queue()
+# indexedurls = []
+# with open('allurls.txt', 'r') as f:
+#     indexedurls = f.read().splitlines()
 
-def p1(q:multiprocessing.Queue):
-    a = q.get()
-    print(a)
+# comixurls = []
+# for url in indexedurls :
+#     if urlparse(url).hostname == 'comix.to':
+#         comixurls.append(url)
 
-def p2(q:multiprocessing.Queue):
-    time.sleep(5)
-    for i in range(5):
-        print("Sending hi from p2")
-        q.put("hi from p2")
-        print("Sent hi from p2")
+res = m.db.indexed_data.update_many({"url":{"$regex":"comix.to"}}, {"$mul":{"tf":0.5}})
+# print(f"updating indexes for {len(comixurls)}")
+# m.db.indexed_data.delete_many({"url":{"$in":comixurls}})
+# print(f"updating indexes for {len(comixurls)}")
+# m.db.pages.update_many({"url":{"$in":comixurls}}, {"$set":{"status":0}})
+# print(f"updating indexes for {len(comixurls)}")
+#m.db.pages.update_many({"url":{"$nin":indexedurls}}, {"$set":{"status":-1}})
+# res = m.db.pages.delete_many({"url":{"$regex":"comix.to"}})
 
-for i in range(5):
-    p = multiprocessing.Process(target=p1, args=(q,))
-    p.start()
-
-p2 = multiprocessing.Process(target=p2, args=(q,))
-p2.start()
+print(res)

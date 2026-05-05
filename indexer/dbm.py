@@ -3,8 +3,13 @@ import pymongo
 import sqlite3
 from dotenv import load_dotenv
 import os
+import sys
 import time
+parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
+# Add it to the list of places Python looks for modules
+sys.path.append(parent_dir)
+import helper
 from multipledispatch import dispatch
 
 load_dotenv()
@@ -146,22 +151,31 @@ class dbm:
             words_op = []
             # i = 0
             # self.db.words.update_many({"word":{"$in":words}},{"$inc":{"numberdocs":1}},upsert=True)
+            if terms == 0 :
+                terms = 1
             self.db.indexed_data.insert_many([{'url':url, 'word':word, 'tf':((hash[word]/terms)/(K+(hash[word]/terms)))} for word in words], ordered=False)
-            
+            # idexops = [{'url':url, 'word':word, 'tf':((hash[word]/terms)/(K+(hash[word]/terms)))} for word in words]
+
+            #kgops = []
             for word in words :
             #     indexed_data_op.append(pymongo.InsertOne({'url':url,'word':word.lower(),'tf':(hash[i]/terms)}))
+                #kgrams = helper.generate_kgrams(word)
+                #kgops.append(pymongo.UpdateMany({"kgram":{"$in":kgrams}}, {"$addToSet":{"words":word}}))
                 words_op.append(pymongo.UpdateOne({"word":word},{"$inc":{"numberdocs":1}},upsert=True))
             #     i += 1
             self.completed_page(url)
             # self.db.indexed_data.bulk_write(indexed_data_op,ordered=False)
             self.db.words.bulk_write(words_op,ordered=False)
+            # self.db.kgrams.bulk_write(kgops, ordered=False)
             doc = self.db.global_vars.find_one_and_update({"_id":"totaldocs"},{"$inc":{"total_num":1}},upsert=True, return_document=pymongo.ReturnDocument.AFTER)
-
-            if doc["total_num"] % 1000 == 0 :
-                print(f'Updating idf of documents. Current number of documents : {doc["total_num"]}')
-                # self.update_idf(doc)
+            
+            # return (words_op, idexops)
+            # if doc["total_num"] % 1000 == 0 :
+            #     print(f'Updating idf of documents. Current number of documents : {doc["total_num"]}')
+            #     # self.update_idf(doc)
         except Exception as e:
             print(f"Updating word data to mongo db failed due to error : {e}")
+            # return None,None
 
     @dispatch()
     def update_idf(self):

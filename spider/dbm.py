@@ -17,8 +17,7 @@ class dbm:
 
         self.client = pymongo.MongoClient(host, port)
         self.db = self.client.search_engine
-
-
+        
         if "robots" not in self.db.list_collection_names():
             print(("c", "Creating robots collection with schema validation"))
             result = self.db.create_collection(

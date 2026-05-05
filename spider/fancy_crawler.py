@@ -81,41 +81,47 @@ def fetch_url_worker(manager, urlsqueue : multiprocessing.Queue):
     while True :
         if urlsqueue.qsize() < 2*CONCURRENT_REQUESTS:
             pipeline = [
-                {
-                    "$match": {
-                        "status": 0   # filter first
+                    {
+                        "$match": {
+                            "status": -2 
+                        }
+                    },
+                    {
+                        # 1. Sort BEFORE grouping so $first gets the correct record
+                        "$sort": {
+                            "upload_time": -1,
+                            "timestamp": 1
+                        }
+                    },
+                    {
+                        # 2. Use $group to pick the first occurrence of each netloc
+                        "$group": {
+                            "_id": "$netloc",
+                            "id": { "$first": "$_id" },
+                            "url": { "$first": "$url" },
+                            "upload_time": { "$first": "$upload_time" },
+                            "timestamp": { "$first": "$timestamp" },
+                            # Add any other fields you need here
+                        }
+                    },
+                    {
+                        # 3. Re-sort the final unique list
+                        "$sort": {
+                            "upload_time": -1,
+                            "timestamp": 1
+                        }
+                    },
+                    {
+                        "$limit": 5*CONCURRENT_REQUESTS
                     }
-                },
-                {
-                    "$sort":{
-                        "upload_time":-1
-                    }
-                }
-                ,{
-                    "$group": {
-                        "_id": "$netloc",
-                        "doc": {"$first": "$$ROOT"}
-                    }
-                },
-                {
-                    "$replaceRoot": {"newRoot": "$doc"}
-                },
-                {
-                    "$project": {
-                        "url": 1,
-                    }
-                },
-                {
-                    "$limit": 2*CONCURRENT_REQUESTS
-                }
-            ]
+                ]
 
             docs = list(manager.db.urls_to_crawl.aggregate(pipeline))
-            manager.db.urls_to_crawl.update_many({'url':{'$in':docs}}, {'$set':{'status':1}})
+            manager.db.urls_to_crawl.update_many({'url':{'$in':[doc['url'] for doc in docs]}}, {'$set':{'status':1}})
             # manager.db.hosts.update_many({"netloc":{"$in":docs}},{"$inc":{"total":1}}, upsert=True)
             # docs = manager.retrieve_urls_to_crawl(limit=1000, overbooked_hosts=[])
             # print("fetched")
-            for doc in docs :
+            for doc in reversed(docs) :
                 urlsqueue.put(doc['url'])
         # time.sleep(0.1)
 
@@ -517,7 +523,7 @@ async def main():
                 await asyncio.gather(*tasks)
                 log_queue.put(("a", "[green]Tasks completed, processing results...[/green]"))
                 # manager.set_flag_to_crawl(0)
-                break
+                # break
         finally:
             # ---- CLEANUP ----
             # await asyncio.gather(*tasks, return_exceptions=True)

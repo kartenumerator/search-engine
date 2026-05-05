@@ -40,6 +40,27 @@ class dbm:
             )
             self.db.indexed_data.create_index({'word':1,'url':1}, unique=True)
         
+        if "live" not in self.db.list_collection_names():
+            print("Creating the live collection")
+            result = self.db.create_collection(
+                "live", validator={
+                '$jsonSchema': {
+                    'bsonType': 'object',
+                    'additionalProperties': True,
+                    'required': ['url', 'word'],
+                    'properties': {
+                        'word':{'bsonType':'string'},
+                        'url':{'bsonType':'string'},
+                        'tf':{'bsonType':'double'},
+                        'weight':{'bsonType':'double'}
+                    }
+                }
+            }
+            )
+            self.db.live.create_index({'word':1,'url':1}, unique=True)
+            self.db.live.create_index({'word':1})
+            self.db.live.create_index({'url':1})
+        
 
         # if "live_for_search" not in self.db.list_collection_names():
         #     print("Creating the live_for_search collection")

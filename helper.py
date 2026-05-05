@@ -36,3 +36,21 @@ def check_only_english_alphanum_symbols(word):
     if re.match(pattern, word):
         return True
     return False
+
+def jaccard_distance(str1, str2):
+    # Convert strings to sets of words
+    a = set(generate_kgrams(str1.lower()))
+    b = set(generate_kgrams(str2.lower()))
+    
+    # print(a)
+    # print(b)
+    # Calculate Jaccard Similarity
+    intersection = len(a.intersection(b))
+    union = len(a.union(b))
+    # print(intersection, union)
+    # Calculate Jaccard Distance
+    return 1 - (intersection/union) if union != 0 else 1 
+
+def generate_kgrams(word, k=3):
+    word = f"${word}$"
+    return [word[i:i+k] for i in range(len(word) - k + 1)]
