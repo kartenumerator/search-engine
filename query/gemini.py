@@ -1,5 +1,5 @@
 from google import genai
-client = genai.Client(api_key="AIzaSyCMK0WypW8KMrHSecx121omq6VJw4NXREM")
+client = genai.Client(api_key="")
 def summarize_ten_docs(docs, query):
     all_content = []
     
