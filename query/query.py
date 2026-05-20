@@ -13,7 +13,6 @@ import didyoumean
 import redis 
 import gemini
 
-
 r = redis.Redis(host="localhost", port=6379, db=0)
 
 stop_words = set(stopwords.words('english'))

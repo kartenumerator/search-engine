@@ -131,7 +131,7 @@ async def get_robots(session, url):
     parsedjoinedurl = urlparse(url)
     
     def add_robot_to_db(netloc, file_content,log_queue):
-        tmpmng = dbm("localhost",27017,log_queue=log_queue)
+        tmpmng = dbm(os.getenv('MONGO_HOST'),os.getenv('MONGO_PORT'),log_queue=log_queue)
         tmpmng.add_robot_file(netloc, file_content)
 
     try :
