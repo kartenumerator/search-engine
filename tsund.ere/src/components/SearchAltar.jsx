@@ -75,7 +75,7 @@ const SearchAltar = ({ query, setQuery, onSearch, isSearching, theme }) => {
         )}
 
         <motion.form 
-          onSubmit={(e) => { e.preventDefault(); onSearch(1); }}
+          onSubmit={(e) => { e.preventDefault(); onSearch(query, 1); }}
           className={`relative flex flex-col glass-morphism rounded-[1.5rem] md:rounded-[2rem] overflow-hidden group shadow-2xl z-10 transition-all duration-500 ${
             isNewspaper 
               ? 'bg-white/40 border-ink/20' 

@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import katex from "katex";
-import "katex/dist/katex.min.css";
+import { useSearchParams } from 'react-router-dom';
+// import katex from "katex";
+// import "katex/dist/katex.min.css";
 import ReactMarkdown from "react-markdown";
 
 const ResultSkeleton = ({ isNewspaper }) => (
@@ -144,18 +145,31 @@ const AISummary = ({ summary, isLoading, isNewspaper }) => {
   );
 };
 
-const ResultsDisplay = ({ query, setQuery, onSearch, isSearching, results, didyoumean, onBack, page, setPage, theme, aiSummary, isGeneratingSummary }) => {
+const ResultsDisplay = ({onSearch, results, didyoumean, onBack, theme, aiSummary, isGeneratingSummary }) => {
   const isNewspaper = theme === 'newspaper';
+  const [searchParams] = useSearchParams();
+  const q = searchParams.get('q'); // For URL like /search?q=react
+  const p = searchParams.get('page'); // For URL like /search?q=react
+  
+  const [query,setQuery] = React.useState(q)
+  const [page, setPage] = React.useState(parseInt(p))
+  
+  useEffect(()=>{
+    if(results == null){
+      // setIsSearching(true);
+      onSearch(query, page);
+    }
+  }, [])
 
   const handleNext = () => {
   	setPage(page+1)
-    onSearch(page+1);
+    onSearch(query, page+1);
   };
 
   const handlePrev = () => {
     if (page > 1) {
   	  setPage(page-1)
-      onSearch(page-1);
+      onSearch(query, page-1);
     }
   };
 
@@ -163,7 +177,7 @@ const ResultsDisplay = ({ query, setQuery, onSearch, isSearching, results, didyo
     <motion.div 
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className={`w-full flex-1 flex flex-col h-full overflow-hidden p-4 md:p-6 pt-24 md:pt-32`}
+      className={`w-full flex-1 flex flex-col h-full p-4 md:p-6 pt-24 md:pt-32 overflow-y-auto custom-scrollbar`}
     >
       <div className="flex flex-col mb-6 md:mb-10 w-full max-w-4xl mx-auto">
         <div className={`flex flex-col glass-morphism overflow-hidden transition-all shadow-2xl ${
@@ -180,7 +194,7 @@ const ResultsDisplay = ({ query, setQuery, onSearch, isSearching, results, didyo
             </motion.button>
             
             <form 
-              onSubmit={(e) => { e.preventDefault(); onSearch(1); }}
+              onSubmit={(e) => { e.preventDefault(); onSearch(query, 1); }}
               className="flex-1 flex items-center px-2 md:px-4"
             >
               <input 
@@ -191,11 +205,11 @@ const ResultsDisplay = ({ query, setQuery, onSearch, isSearching, results, didyo
               />
               <button 
                 type="submit"
-                disabled={isSearching}
+                disabled={(results==null)}
                 className={`w-8 h-8 md:w-10 md:h-10 rounded-full flex items-center justify-center transition-colors group ${isNewspaper ? 'hover:bg-ink hover:text-bg' : 'hover:text-accent'}`}
               >
-                <span className={`material-symbols-outlined text-lg md:text-xl transition-transform ${isSearching ? 'animate-spin text-accent' : 'group-hover:scale-110'}`}>
-                  {isSearching ? 'progress_activity' : 'search'}
+                <span className={`material-symbols-outlined text-lg md:text-xl transition-transform ${(results==null) ? 'animate-spin text-accent' : 'group-hover:scale-110'}`}>
+                  {(results==null) ? 'progress_activity' : 'search'}
                 </span>
               </button>
             </form>
@@ -206,14 +220,14 @@ const ResultsDisplay = ({ query, setQuery, onSearch, isSearching, results, didyo
             <motion.div 
               className="absolute h-full bg-accent"
               initial={{ width: 0, opacity: 0 }}
-              animate={isSearching ? { 
+              animate={(results==null) ? { 
                 width: ["0%", "100%"],
                 opacity: 1
               } : { 
                 width: "0%",
                 opacity: 0
               }}
-              transition={isSearching ? { 
+              transition={(results==null) ? { 
                 duration: 1.5, 
                 repeat: Infinity, 
                 ease: "linear"
@@ -222,7 +236,7 @@ const ResultsDisplay = ({ query, setQuery, onSearch, isSearching, results, didyo
           </div>
         </div>
 
-        {didyoumean && !isSearching && (
+        {didyoumean && !(results==null) && (
           <motion.div 
             initial={{ opacity: 0, x: -10 }}
             animate={{ opacity: 1, x: 0 }}
@@ -230,7 +244,7 @@ const ResultsDisplay = ({ query, setQuery, onSearch, isSearching, results, didyo
           >
             <span className="opacity-40 font-mono tracking-tighter uppercase text-[9px] md:text-[10px]">Suggestion //</span>
             <button 
-              onClick={() => { setQuery(didyoumean); onSearch(); }}
+              onClick={() => { setQuery(didyoumean); onSearch(query, 1); }}
               className="text-accent hover:text-ink transition-colors font-bold tracking-tight text-xs md:text-sm"
             >
               {didyoumean}
@@ -239,9 +253,9 @@ const ResultsDisplay = ({ query, setQuery, onSearch, isSearching, results, didyo
         )}
       </div>
 
-      <div className="flex-1 space-y-4 overflow-y-auto custom-scrollbar pr-4 pb-20">
+      <div className="flex-1 space-y-4 pr-4 pb-20">
         <div className="max-w-4xl mx-auto w-full">
-          {!isSearching && (
+          {!(results==null) && (
             <AISummary 
               summary={aiSummary} 
               isLoading={isGeneratingSummary} 
@@ -249,8 +263,8 @@ const ResultsDisplay = ({ query, setQuery, onSearch, isSearching, results, didyo
             />
           )}
           
-          {isSearching ? (
-            <div className="space-y-4">
+          {(results==null) ? (
+            <div className="space-y-4 ">
               <ResultSkeleton isNewspaper={isNewspaper} />
               <ResultSkeleton isNewspaper={isNewspaper} />
               <ResultSkeleton isNewspaper={isNewspaper} />
@@ -295,7 +309,7 @@ const ResultsDisplay = ({ query, setQuery, onSearch, isSearching, results, didyo
           ))
         )}
 
-        {!isSearching && results.length > 0 && (
+        {!(results==null) && results.length > 0 && (
           <div className={`flex flex-col items-center py-12 space-y-4`}>
             <div className="flex items-center space-x-12">
               <motion.button

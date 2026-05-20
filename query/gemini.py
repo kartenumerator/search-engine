@@ -1,5 +1,8 @@
 from google import genai
-client = genai.Client(api_key="AIzaSyCMK0WypW8KMrHSecx121omq6VJw4NXREM")
+from dotenv import load_dotenv
+import os
+load_dotenv()
+client = genai.Client(api_key=os.getenv('GEMINI_API'))
 def summarize_ten_docs(docs, query):
     all_content = []
     
