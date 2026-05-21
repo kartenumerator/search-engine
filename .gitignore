@@ -3,7 +3,7 @@ data.json
 .vscode/*
 # spider/__pycache__/*
 venv/*
-*.txt
+# *.txt
 db/*
 */__pycache__/*
 */node_modules
