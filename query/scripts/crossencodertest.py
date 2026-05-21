@@ -1,10 +1,19 @@
 import time
+import torch
 
+# Check for NVIDIA GPU (CUDA), Apple Silicon (MPS), or fallback to CPU
+device = torch.device(
+    "cuda" if torch.cuda.is_available() 
+    else "mps" if torch.backends.mps.is_available() 
+    else "cpu"
+)
+
+print(f"Using device: {device}")
 from sentence_transformers import CrossEncoder
 
 # 1. Load model (good default)
 model = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
-model.to('cuda')
+model.to(device)
 
 def rerank(query, documents, top_k=None):
     """

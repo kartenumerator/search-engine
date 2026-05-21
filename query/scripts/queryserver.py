@@ -1,25 +1,41 @@
 from dbm import dbm
 from functools import lru_cache
+import os
+import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
 import time
 from fastapi.responses import StreamingResponse
 from nltk.stem import WordNetLemmatizer
 from nltk.corpus import wordnet
-import crossencodertest
+import crossencodertest as crossencodertest
 from nltk import pos_tag
-import didyoumean
+import didyoumean as didyoumean
 import redis
 import json
 from fastapi import FastAPI, Query, Request
 import asyncio
 import anyio
-import gemini
+import gemini as gemini
+import os
 
 app = FastAPI()
 
-r = redis.Redis(host="localhost", port=6379, db=0)
+r = redis.Redis(host=os.getenv("REDIS_HOST"), port=int(os.getenv('REDIS_PORT')), db=0)
 LOADED_PAGES = 3
+
+resources = {'corpora/stopwords' : 'stopwords','tokenizers/punkt':'punkt','tokenizers/punkt_tab':'punkt_tab', 'wordnet':'wordnet', 'taggers/averaged_perceptron_tagger_eng/':'averaged_perceptron_tagger_eng'}
+
+for resource_name in resources :
+    try:
+        nltk.data.find(resource_name)
+        print(f"'{resource_name}' is installed.")
+    except LookupError as e:
+        # print(e)
+        print(f"'{resource_name}' not found. You can download it using nltk.download('{resource_name}')")
+        nltk.download(resources[resource_name])
+
+
 stop_words = set(stopwords.words('english'))
 
 lemmatizer = WordNetLemmatizer()
@@ -184,7 +200,7 @@ def query_redis(query, page:int=1):
 
     urls = []
     for url, score in combined_scores:
-        print(url.decode(), score)
+        # print(url.decode(), score)
         urls.append(url.decode())
 
     print(f"Fetching pages at {(time.time_ns() - start_time)/1000000000} s")
@@ -205,9 +221,8 @@ def query_redis(query, page:int=1):
         res = (crossencodertest.rerank(newquery, hits, LOADED_PAGES*10))
         print(f"Results in {(time.time_ns() - start_time)/1000000000} s")
 
-        for doc in res:
-            print(doc['url'], doc['cross_score'])
-            # urls.append(url.decode())
+        for doc in res :
+            del doc['html']
 
         return newquery, res[((page-1)%LOADED_PAGES)*10:((page-1)%LOADED_PAGES)*10 + 10], filtered_query, checkingdoc
         # tosumdocs = []
@@ -304,8 +319,8 @@ def query_mongod(newquery, page, filtered_query, checkingdoc):
     res = (crossencodertest.rerank(newquery, hits, LOADED_PAGES*10))
     print(f"Results in {(time.time_ns() - start_time)/1000000000} s")
 
-    # for doc in res[:10] :
-    #     del doc['html']
+    for doc in res :
+        del doc['html']
 
     return res[((page-1)%LOADED_PAGES)*10:((page-1)%LOADED_PAGES)*10 + 10], docs, wordict
 
@@ -417,8 +432,6 @@ async def generate(query: str, page: int, client_host: str):
         tosumdocs = []
         for doc in result:
             tosumdocs.append({"title": doc['title'], 'html': doc['html'], 'url': doc['url'], 'meta_description': doc['meta_description']})
-            # Try to avoid mutability side-effects if shared across cache, but matches original logic:
-            if 'html' in doc: del doc['html']
             
         if page != 1:
             return
@@ -459,3 +472,7 @@ async def search(request: Request, query: str = Query(..., description="Search q
         generate(query, page, client_host), 
         media_type="application/json"
     )
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
