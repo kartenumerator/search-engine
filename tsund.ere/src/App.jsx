@@ -56,8 +56,9 @@ export default function App() {
       const queryString = new URLSearchParams({query:quer, page:page}).toString();
       // url.searchParams.set("query",query)/
       console.log(queryString)
-
-      const res = await fetch(`/search?${queryString}`, {signal:controller.signal,});
+      const api = import.meta.env.VITE_API;
+      console.log(api)
+      const res = await fetch(`${api}/search?${queryString}`, {signal:controller.signal,});
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       setIsGeneratingSummary(true);
