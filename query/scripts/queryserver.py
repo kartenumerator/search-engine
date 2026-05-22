@@ -18,8 +18,19 @@ import asyncio
 import anyio
 import gemini as gemini
 import os
+from fastapi.middleware.cors import CORSMiddleware
+from anyio import CapacityLimiter
 
+limiter = CapacityLimiter(1)
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://www.tsundere.online"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 r = redis.Redis(host=os.getenv("REDIS_HOST"), port=int(os.getenv('REDIS_PORT')), db=0)
 LOADED_PAGES = 3
@@ -205,7 +216,7 @@ def query_redis(query, page:int=1):
 
     print(f"Fetching pages at {(time.time_ns() - start_time)/1000000000} s")
 
-    hits = list(m.db.pages.find({"url":{"$in":urls}}, {"_id":0, "url":1, "title":1, "html":1, "meta_description":1, "poster":1}))
+    hits = list(m.db.pages.find({"url":{"$in":urls}}, {"_id":0, "url":1, "title":1, "html":1, "meta_description":1}))
     print(f"Reranking at {(time.time_ns() - start_time)/1000000000} s")
     #print(len(docs))
     #print(docs[0])
@@ -309,7 +320,7 @@ def query_mongod(newquery, page, filtered_query, checkingdoc):
     docs = list(m.db.indexed_data.aggregate(pipeline, allowDiskUse=True))
     print(f"Fetching pages at {(time.time_ns() - start_time)/1000000000} s")
 
-    hits = list(m.db.pages.find({"url":{"$in":[doc['_id'] for doc in docs]}}, {"_id":0,"url":1, "title":1, "html":1, "meta_description":1, "poster":1}))
+    hits = list(m.db.pages.find({"url":{"$in":[doc['_id'] for doc in docs]}}, {"_id":0,"url":1, "title":1, "html":1, "meta_description":1}))
     print(f"Reranking at {(time.time_ns() - start_time)/1000000000} s")
     
     if len(hits) == 0 :
@@ -385,14 +396,14 @@ async def generate(query: str, page: int, client_host: str):
     try:
         # 1. Offload Redis query & tokenization to a worker thread
         newquery, result, filtered_query, checkingdoc = await anyio.to_thread.run_sync(
-            sync_query_redis, query, page
+            sync_query_redis, query, page, limiter=limiter
         )
 
         if result is None or result[0]['cross_score'] < 0:
             if result is not None:
                 yield json.dumps({
                     "type": "search", 
-                    "data": {"results": result, "query": (newquery if newquery else query)}, 
+                    "data": {"results": [{k: v for k, v in item.items() if k != 'html'} for item in result], "query": (newquery if newquery else query)}, 
                     "db": "cache"
                 }) + '\n'
                 # Short yield pause allowing the event loop to check for cancellations
@@ -400,7 +411,7 @@ async def generate(query: str, page: int, client_host: str):
             
             # 2. Offload MongoDB aggregation and Cross-Encoder to thread pool
             mongod_res = await anyio.to_thread.run_sync(
-                sync_query_mongod, (newquery if newquery else query), page, filtered_query, checkingdoc
+                sync_query_mongod, (newquery if newquery else query), page, filtered_query, checkingdoc, limiter=limiter
             )
             
             if mongod_res is None:
@@ -411,7 +422,7 @@ async def generate(query: str, page: int, client_host: str):
             result, data, wordict = mongod_res
             
             # Fire-and-forget cache populate or run in thread
-            await anyio.to_thread.run_sync(sync_add_new_entries, data, wordict)
+            await anyio.to_thread.run_sync(sync_add_new_entries, data, wordict, limiter=limiter)
 
         if result is None:
             yield json.dumps({"type": "search", "data": {"results": [], "query": "No results found...", "db": "mongod"}}) + '\n'
@@ -419,7 +430,7 @@ async def generate(query: str, page: int, client_host: str):
         
         yield json.dumps({
             "type": "search", 
-            "data": {"results": result, "query": (newquery if newquery else query)}, 
+            "data": {"results": [{k: v for k, v in item.items() if k != 'html'} for item in result], "query": (newquery if newquery else query)}, 
             "db": "mongod"
         }) + '\n'
         await asyncio.sleep(0.001)
@@ -433,7 +444,7 @@ async def generate(query: str, page: int, client_host: str):
 
         try:
             # 3. Assuming gemini.summarize_ten_docs makes synchronous network requests, thread it too
-            rag = await anyio.to_thread.run_sync(gemini.summarize_ten_docs, tosumdocs, newquery)
+            rag = await anyio.to_thread.run_sync(gemini.summarize_ten_docs, tosumdocs, newquery, limiter=limiter)
             yield json.dumps({"type": "rag", "data": rag}) + '\n'
         except Exception as e:
             print(f"RAG Error: {e}")
@@ -451,8 +462,8 @@ async def generate(query: str, page: int, client_host: str):
 
 @app.get("/search")
 async def search(request: Request, query: str = Query(..., description="Search query string"), page: int = 1):
-    client_host = request.client.host
-    
+    client_host = request.headers.get("CF-Connecting-IP")
+    print(client_host)
     # Check if this host already has an execution thread working
     if client_host in active_requests:
         print(f"[!] New request received from {client_host}. Canceling older request.")
@@ -471,3 +482,16 @@ async def search(request: Request, query: str = Query(..., description="Search q
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+ALLOWED_DOMAINS = {
+    "static.comix.to"
+}
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (X11; Linux x86_64) "
+        "AppleWebKit/537.36 Chrome/124.0 Safari/537.36"
+    ),
+    "Referer": "https://comix.to/",
+}
