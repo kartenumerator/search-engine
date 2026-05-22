@@ -462,6 +462,8 @@ async def generate(query: str, page: int, client_host: str):
 
 @app.get("/search")
 async def search(request: Request, query: str = Query(..., description="Search query string"), page: int = 1):
+    with open('/app/searches.txt', 'a') as f:
+        f.write(query)
     client_host = request.headers.get("CF-Connecting-IP")
     print(client_host)
     # Check if this host already has an execution thread working

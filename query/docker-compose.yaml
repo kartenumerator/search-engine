@@ -27,9 +27,11 @@ services:
       MONGO_PORT: 27017
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      GEMINI_API: AIzaSyBwkc9qLHCJhYYF6rYK5A0al5r7VQ0Z_qE
+      GEMINI_API: ${GEMINIAPI}
       ENVIRONMENT: production
-    
+
+    volumes:
+      - ./searches.txt:/app/searches.txt
     healthcheck:
       test: ["CMD", "python3", "/app/healthcheck.py"]  
       interval: 30s
