@@ -221,8 +221,6 @@ def query_redis(query, page:int=1):
         res = (crossencodertest.rerank(newquery, hits, LOADED_PAGES*10))
         print(f"Results in {(time.time_ns() - start_time)/1000000000} s")
 
-        for doc in res :
-            del doc['html']
 
         return newquery, res[((page-1)%LOADED_PAGES)*10:((page-1)%LOADED_PAGES)*10 + 10], filtered_query, checkingdoc
         # tosumdocs = []
@@ -318,9 +316,6 @@ def query_mongod(newquery, page, filtered_query, checkingdoc):
         return None
     res = (crossencodertest.rerank(newquery, hits, LOADED_PAGES*10))
     print(f"Results in {(time.time_ns() - start_time)/1000000000} s")
-
-    for doc in res :
-        del doc['html']
 
     return res[((page-1)%LOADED_PAGES)*10:((page-1)%LOADED_PAGES)*10 + 10], docs, wordict
 

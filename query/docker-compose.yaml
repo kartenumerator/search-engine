@@ -8,7 +8,7 @@ services:
     volumes:
       - ../redis.conf:/usr/local/etc/redis/redis.conf
       # Mount your local dump file into the Redis working directory
-      - ../data:/data 
+      - ../data:/data
     command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
     networks:
      - query_network

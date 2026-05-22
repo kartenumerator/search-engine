@@ -2,7 +2,7 @@
 data.json
 .vscode/*
 # spider/__pycache__/*
-venv/*
+*/venv/*
 # *.txt
 db/*
 */__pycache__/*
@@ -10,3 +10,4 @@ db/*
 __pycache__
 uselesswords.txt
 *.rdb
+vnev
