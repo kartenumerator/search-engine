@@ -4,6 +4,9 @@ import { motion, useScroll, useSpring, useTransform, AnimatePresence } from 'mot
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from 'rehype-katex';
+import "katex/dist/katex.min.css";
 
 function cn(...inputs) {
   return twMerge(clsx(inputs));
@@ -272,9 +275,10 @@ const Documentation = () => {
         className="flex-1 h-full overflow-y-auto px-6 md:px-20 py-16 scroll-smooth custom-scrollbar relative"
         id="documentation-scroll-container"
       >
-        <div className="max-w-4xl mx-auto prose prose-invert prose-headings:text-ink prose-p:text-ink/80 prose-strong:text-accent prose-table:text-ink/70 prose-th:border-ink/20 prose-td:border-ink/10 relative selection:bg-accent/30 font-body">
+        <div className="max-w-4xl mx-auto prose prose-invert prose-li:text-ink/80 prose-headings:text-ink prose-p:text-ink/80 prose-strong:text-accent prose-table:text-ink/70 prose-th:border-ink/20 prose-td:border-ink/10 relative selection:bg-accent/30 font-body">
           <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
+            remarkPlugins={[remarkMath, remarkGfm]}
+            rehypePlugins={[rehypeKatex]}
             components={{
               table: ({ children }) => (
                 <div className="my-8 overflow-x-auto rounded-2xl border border-glass-border shadow-lg bg-bg/5 backdrop-blur-sm">

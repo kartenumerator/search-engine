@@ -5,6 +5,11 @@ import { useSearchParams } from 'react-router-dom';
 // import "katex/dist/katex.min.css";
 import ReactMarkdown from "react-markdown";
 
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import rehypeKatex from 'rehype-katex';
+import "katex/dist/katex.min.css";
+
 const ResultSkeleton = ({ isNewspaper }) => (
   <motion.div 
     initial={{ opacity: 0.5 }}
@@ -127,7 +132,60 @@ const AISummary = ({ summary, isLoading, isNewspaper }) => {
           } ${!isExpanded ? 'line-clamp-4' : ''}`}
         >
           {isTypingFinished ? (
-            <p className="leading-relaxed"><ReactMarkdown>{summary}</ReactMarkdown></p>
+            // <p className="">
+              <div className="leading-relaxed max-w-4xl mx-auto prose prose-invert prose-li:text-ink/80 prose-headings:text-ink prose-p:text-ink/80 prose-strong:text-accent prose-table:text-ink/70 prose-th:border-ink/20 prose-td:border-ink/10 relative selection:bg-accent/30 font-body">
+                        <ReactMarkdown
+                          remarkPlugins={[remarkMath, remarkGfm]}
+                          rehypePlugins={[rehypeKatex]}
+                          components={{
+                            table: ({ children }) => (
+                              <div className="my-8 overflow-x-auto rounded-2xl border border-glass-border shadow-lg bg-bg/5 backdrop-blur-sm">
+                                <table className="min-w-full divide-y divide-glass-border text-left text-xs">
+                                  {children}
+                                </table>
+                              </div>
+                            ),
+                            thead: ({ children }) => (
+                              <thead className="bg-ink/5 font-mono text-[10px] tracking-wider text-accent uppercase">
+                                {children}
+                              </thead>
+                            ),
+                            tbody: ({ children }) => (
+                              <tbody className="divide-y divide-glass-border/40 font-body">
+                                {children}
+                              </tbody>
+                            ),
+                            tr: ({ children }) => (
+                              <tr className="hover:bg-ink/5 transition-colors duration-150">
+                                {children}
+                              </tr>
+                            ),
+                            th: ({ children }) => (
+                              <th className="px-3 py-2 font-bold text-accent border-b border-glass-border tracking-wider text-[15px]">
+                                {children}
+                              </th>
+                            ),
+                            td: ({ children }) => (
+                              <td className="px-3 py-2 text-ink/80 leading-relaxed font-medium text-[15px]">
+                                {children}
+                              </td>
+                            ),
+                            img: ({ src, alt }) => (
+                              <img
+                                src={src}
+                                alt={alt}
+                                className="my-8 block w-full h-auto object-cover overflow-hidden rounded-2xl border border-glass-border shadow-2xl bg-ink/5"
+                                referrerPolicy="no-referrer"
+                              />
+                            )
+                          }}
+                        >
+                          {/* {DOCUMENTATION_CONTENT} */}
+                        
+                        {summary}
+                        </ReactMarkdown>
+                      </div>
+            // </p>
           ) : (
             <TypewriterText text={summary.slice(0,800)+'...'} onComplete={handleTypingComplete} />
           )}
